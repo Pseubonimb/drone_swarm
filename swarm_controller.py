@@ -1,7 +1,7 @@
 from pymavlink import mavutil
 import time
 
-# Порты подключения к дронам
+# Порты подключения к дронам (ПОКА HARD-CODE)
 PORTS = ["udpin:127.0.0.1:14550", "udpin:127.0.0.1:14551"]
 
 # Подключение ко всем дронам

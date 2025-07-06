@@ -1,5 +1,2 @@
-mav*
-MAVProxy
-pymavlink_env
-eeprom.bin
-logs
+drone_env/lib/python3.12/site-packages/wx/
+drone_env/lib/python3.12/site-packages/wxpython-4.2.3.dist-info
