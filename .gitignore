@@ -1,2 +1,7 @@
 drone_env/lib/python3.12/site-packages/wx/
 drone_env/lib/python3.12/site-packages/wxpython-4.2.3.dist-info
+eeprom.bin
+mav.parm
+mav.tlog
+mav.tlog.raw
+controllers/ardupilot_vehicle_controller/__pycache__

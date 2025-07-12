@@ -38,7 +38,11 @@ DRONES = [
     }
 ]
 
-def start_sim_vehicle(config): # Запустить "мозг" дрона
+def start_sim_vehicle(config):
+    """
+    Запускает симулятор SITL с передачей MAVLink по TCP-порту.
+    Использует --out=127.0.0.1:<tcp_port> для передачи данных MAVProxy.
+    """
     args = [
         SIM_VEHICLE_PATH,
         "-v", "ArduCopter",
@@ -46,24 +50,34 @@ def start_sim_vehicle(config): # Запустить "мозг" дрона
         "--model", "webots-python",
         f"--instance={config['instance']}",
         f"--out=127.0.0.1:{config['tcp_port']}",
-        f"--out=127.0.0.1:{config['udp_port']}"
+        "--console",  # Для вывода консоли MAVProxy
+        #"--map"       # Запуск карты (по желанию)
     ] + config["params"]
 
-    print(f"Launching drone instance {config['instance']} on ports {config['tcp_port']}")# and {config['udp_port']}")
+    print(f"Launching SITL instance {config['instance']} on TCP port {config['tcp_port']}")
     return subprocess.Popen(args)
 
-def start_mavproxy(config): # Запуск MAVProxy в новом окне
+def start_mavproxy(config):
+    """
+    Запускает MAVProxy, который получает команды от swarm_controller.py по UDP и отправляет их SITL по TCP.
+    Запуск в отдельном терминале для удобства мониторинга.
+    """
     args = [
         "gnome-terminal",
         "--",
         "bash", "-c",
-        f"mavproxy.py --master=tcp:127.0.0.1:{config['tcp_port']} "
-        f"--out=udpin:127.0.0.1:{config['udp_port']} "
-        f"--console; exec bash"
+        (
+            f"mavproxy.py "
+            f"--master=tcp:127.0.0.1:{config['tcp_port']} "
+            f"--out=udpout:127.0.0.1:{config['udp_port']} "
+            f"--console "
+            f"; exec bash"
+        )
     ]
 
-    print(f"Starting MAVProxy for drone {config['instance']}")
+    print(f"Starting MAVProxy for drone instance {config['instance']} connecting to TCP port {config['tcp_port']} and outputting UDP on {config['udp_port']}")
     return subprocess.Popen(args)
+
 
 if __name__ == "__main__":
     processes = []
@@ -72,13 +86,7 @@ if __name__ == "__main__":
     for drone in DRONES:
         p = start_sim_vehicle(drone)
         processes.append(p)
-        time.sleep(3)  # Пауза между запусками
-
-    # Запуск MAVProxy
-    for drone in DRONES:
-        p = start_mavproxy(drone)
-        processes.append(p)
-        time.sleep(2)
+        time.sleep(5)  # Пауза между запусками
 
     # Запуск контроллера роя
     print("Starting swarm controller...")
