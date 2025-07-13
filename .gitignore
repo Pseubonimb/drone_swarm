@@ -4,5 +4,6 @@ eeprom.bin
 mav.parm
 mav.tlog
 mav.tlog.raw
+mav_2_1.parm
 controllers/ardupilot_vehicle_controller/__pycache__
 logs

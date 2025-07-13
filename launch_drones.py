@@ -49,6 +49,7 @@ def start_sim_vehicle(config):
         "-w",
         "--model", "webots-python",
         f"--instance={config['instance']}",
+        f"--sysid={config['sysid']}",
         f"--out=127.0.0.1:{config['tcp_port']}",
         "--console",  # Для вывода консоли MAVProxy
         #"--map"       # Запуск карты (по желанию)
