@@ -2,7 +2,7 @@ from pymavlink import mavutil
 import time
 import math
 
-def generate_circle_mission(center_lat, center_lon, radius=50, num_points=8, altitude=10):
+def generate_circle_mission(center_lat, center_lon, altitude, num_points, radius):
     mission = []
     for i in range(num_points):
         angle = 2 * math.pi * i / num_points
@@ -45,20 +45,11 @@ def upload_mission(mav, waypoints):
 
     seq = 0
 
-    # 1. Команда взлёта — обычно lat/lon совпадают с первой точкой, alt — высота взлёта
-    lat0, lon0, alt0 = waypoints[0]
-    send_waypoint(mav, seq, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, lat0, lon0, alt0, param1=alt0)
-    seq += 1
-
-    # 2. Основные waypoints
     for lat, lon, alt in waypoints:
         send_waypoint(mav, seq, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, lat, lon, alt)
         seq += 1
 
-    # 3. Команда посадки — на последней точке, alt обычно 0
-    lat_end, lon_end, _ = waypoints[-1]
-    send_waypoint(mav, seq, mavutil.mavlink.MAV_CMD_NAV_LAND, lat_end, lon_end, 0)
-    print("Mission uploaded with takeoff and landing")
+    print("Mission uploaded")
 
 def set_mode(mav, mode_name):
     mode_id = mav.mode_mapping().get(mode_name)
@@ -68,6 +59,64 @@ def set_mode(mav, mode_name):
     print(f"Set mode to {mode_name}")
     time.sleep(2)  # Подождать, чтобы режим установился
 
+# === Проверка, что команда принята === #
+def wait_command_ack(mav, command, timeout=10):
+    tstart = time.time()
+    while time.time() < tstart + timeout:
+        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=1)
+        if ack is not None and ack.command == command:
+            print(f"Got COMMAND_ACK: {ack.result}")
+            return ack.result
+
+    print("Command ACK timeout")
+    return None
+
+# Функция ожидания достижения определенной высоты
+def wait_for_altitude(mav, target_alt, tolerance=0.5, timeout=60):
+    start_time = time.time()
+    print(f"Waiting for drone to reach altitude {target_alt}m...")
+    while True:
+        if time.time() - start_time > timeout:
+            print("Timeout waiting for altitude.")
+            return False
+
+        msg = mav.recv_match(type=['GLOBAL_POSITION_INT', 'VFR_HUD'], blocking=True, timeout=1)
+        if msg:
+            current_alt = 0
+            if msg.get_type() == 'GLOBAL_POSITION_INT':
+                current_alt = msg.relative_alt / 1000.0  # relative_alt в мм, переводим в метры
+            elif msg.get_type() == 'VFR_HUD':
+                current_alt = msg.alt  # alt в VFR_HUD уже в метрах
+
+            print(f"Current altitude: {current_alt:.2f}m")
+            if abs(current_alt - target_alt) < tolerance:
+                print(f"Altitude reached: {current_alt:.2f}m")
+                return True
+        time.sleep(0.1) # Непрерывный опрос
+
+# Функция ожидания завершения текущей миссии (всех waypoint'ов)
+def wait_for_mission_completion(mav, total_waypoints_in_mission, timeout=300):
+    start_time = time.time()
+    print(f"Waiting for mission to complete (last waypoint: {total_waypoints_in_mission-1})...")
+    last_seq = -1
+    while True:
+        if time.time() - start_time > timeout:
+            print("Timeout waiting for mission completion.")
+            return False
+
+        msg = mav.recv_match(type=['MISSION_CURRENT'], blocking=True, timeout=1)
+        if msg:
+            current_seq = msg.seq
+            if current_seq != last_seq:
+                print(f"Current mission item: {current_seq}")
+                last_seq = current_seq
+
+            # Если текущий счётчик seq равен общему количеству точек в миссии, значит миссия завершена
+            # (нумерация точек начинается с 0, поэтому финальная точка будет total_waypoints_in_mission-1)
+            if current_seq >= total_waypoints_in_mission-1:
+                print("Mission completed.")
+                return True
+        time.sleep(0.1)
 
 
 # Порты подключения к дронам (ПОКА HARD-CODE)
@@ -105,7 +154,15 @@ if __name__ == "__main__":
     base_lat = global_pos_msg.lat / 1e7
     base_lon = global_pos_msg.lon / 1e7
 
-    mission_waypoints = generate_circle_mission(base_lat, base_lon, radius=50, num_points=8, altitude=10)
+    # Высота взлёта
+    altitude=20
+    
+    # Общее количество точек (без учёта взлёта и посадки)
+    num_points=8
+
+    # Генерируем точки полётного задания
+    mission_waypoints = generate_circle_mission(base_lat, base_lon, altitude, num_points, radius=10)
+    print(f"ТОЧЕЧКИ: {mission_waypoints}")
 
     for drone in drones:
         print(f"Uploading mission to drone {drone.target_system}")
@@ -120,7 +177,57 @@ if __name__ == "__main__":
         drone.arducopter_arm()
         time.sleep(3)  # Ждём, пока моторы взведутся
 
+        # Производим взлёт
+        print(f"Requesting takeoff to {altitude} meters")
+        drone.mav.command_long_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+        0,
+        0,  # Параметр 1 - Минимальный шаг (при наличии датчика воздушной скорости), желаемый шаг без датчика
+        0,  # Параметры 2-3: пустые
+        0,
+        0,  # Параметр 4 - YAW
+        0,  # Параметр 5 - Latitude
+        0,  # Параметр 6 - Longitude
+        altitude)  # Параметр 7 - высота
+
+        # Ожидаем подтверждения команды на взлёт
+        wait_command_ack(drone, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF)
+
+        # Проверка достижения заданной высоты
+        if not wait_for_altitude(drone, altitude):
+            print("Drone failed to reach takeoff altitude. Aborting mission.")
+            # Добавить логику для безопасной посадки или повторной попытки
+            exit()
+
+        print("Takeoff successful. Drone at 20m.")
+
+
         # Переключаемся в AUTO для выполнения миссии
         set_mode(drone, 'AUTO')
         print(f"Drone {drone.target_system} set to AUTO mode")
+
+        # Ожидаем завершения миссии
+        print("Drone set to AUTO mode. Waiting for mission completion.")
+        if not wait_for_mission_completion(drone, num_points):
+            print("Mission did not complete in time. Aborting.")
+            # Добавить логику для безопасной посадки или повторной попытки
+            exit()
+
+        print("Mission completed successfully.")
+
+        # Производим посадку
+        print(f"Requesting landing")
+        drone.mav.command_long_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_CMD_NAV_LAND,
+        0,
+        0,  # Параметр 1 - Минимальная целевая высота, если посадка отменена (0 = не определено/использовать системные настройки по умолчанию)
+        0,  # Параметр 2 - Режим точного приземления
+        0,  # Параметр 3 - Пустой
+        0,  # Параметр 4 - YAW
+        0,  # Параметр 5 - Latitude
+        0,  # Параметр 6 - Longitude
+        0)  # Параметр 7 - Высота посадки (уровень земли в текущем кадре)
+
+        # Ожидаем подтверждения команды на посадку
+        wait_command_ack(drone, mavutil.mavlink.MAV_CMD_NAV_LAND)
+
+
 
