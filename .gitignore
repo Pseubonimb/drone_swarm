@@ -1,5 +1,10 @@
-drone_env/lib/python3.12/site-packages/wx/
-drone_env/lib/python3.12/site-packages/wxpython-4.2.3.dist-info
+drone_env/bin
+drone_env/include
+drone_env/lib
+drone_env/lib64
+drone_env/share
+drone_env/pyvenv.cfg
+drone_env
 eeprom.bin
 mav.parm
 mav.tlog
@@ -7,3 +12,4 @@ mav.tlog.raw
 mav_2_1.parm
 controllers/ardupilot_vehicle_controller/__pycache__
 logs
+

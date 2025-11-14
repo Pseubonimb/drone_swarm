@@ -1,0 +1,55 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/road/protos/StraightRoadSegment.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/floors/protos/Floor.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/appearances/protos/Grass.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/advertising_board/protos/AdvertisingBoard.proto"
+EXTERNPROTO "../protos/Iris.proto"
+
+WorldInfo {
+  title "Iris Ardupilot"
+  basicTimeStep 2
+  FPS 20
+}
+Viewpoint {
+  orientation 0.04930904784087813 -0.16320617110194435 -0.9853590023515637 5.688153529398557
+  position -3.3554886462739906 -1.9920781269918382 0.9852947659552322
+  follow "Iris"
+  followSmoothness 0.01
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+Floor {
+  size 300 100
+  appearance Grass {
+  }
+}
+AdvertisingBoard {
+  translation 13.1012 17.8267 0
+  rotation 0 0 1 -1.469
+  frontTexture [
+    "logo.png"
+  ]
+  backTexture [
+    "logo.png"
+  ]
+  displayWidth 16.28
+  displayHeight 6
+  poleNumber 2
+  poleType "H-shape"
+  poleHeight 10
+}
+StraightRoadSegment {
+  translation -15 0.3 0.02
+  rotation 0 0 1 0.105
+  width 16.5
+  rightBorder FALSE
+  leftBorder FALSE
+  length 140
+}
+
+# Insert drones

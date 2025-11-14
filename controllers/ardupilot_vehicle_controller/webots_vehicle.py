@@ -1,4 +1,5 @@
 '''
+Пытался добавить ветер - ищи wind !!!!!!!!!!!!!!!!!!!!
 This file implements a class that acts as a bridge between ArduPilot SITL and Webots
 
 AP_FLAKE8_CLEAN
@@ -44,6 +45,7 @@ class WebotsArduVehicle():
     controls_struct_format = 'f'*16
     controls_struct_size = struct.calcsize(controls_struct_format)
     fdm_struct_format = 'd'*(1+3+3+3+3+3)
+    # fdm_struct_format = 'd' * (1 + 3 + 3 + 3 + 3 + 3 + 3)  # 19 doubles: +3 for wind
     fdm_struct_size = struct.calcsize(fdm_struct_format)
 
     def __init__(self,
@@ -149,6 +151,13 @@ class WebotsArduVehicle():
         self._sitl_thread = Thread(daemon=True, target=self._handle_sitl, args=[sitl_address, 9002+10*instance])
         self._sitl_thread.start()
 
+        # # WIND!!!!
+        # self._wind_field = self.robot.getSelf().getField("wind_force")
+        # if self._wind_field:
+        #     print(f"[I{self._instance}] Wind support enabled")
+        # else:
+        #     print(f"[I{self._instance}] Warning: 'wind_force' ExternalForce not found")
+
     def _handle_sitl(self, sitl_address: str = "127.0.0.1", port: int = 9002):
         """Handles all communications with the ArduPilot SITL
 
@@ -216,6 +225,11 @@ class WebotsArduVehicle():
         a = self.accel.getValues()
         gps_pos = self.gps.getValues()
         gps_vel = self.gps.getSpeedVector()
+
+        # Get wind (ENU)
+        # wind = [0.0, 0.0, 0.0]
+        # if self._wind_field:
+        #     wind = self._wind_field.getSFVec3f()
 
         # pack the struct, converting ENU to NED (ish)
         # https://discuss.ardupilot.org/t/copter-x-y-z-which-is-which/6823/3

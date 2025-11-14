@@ -2,6 +2,7 @@ from pymavlink import mavutil
 import time
 import math
 import asyncio
+import argparse
 
 async def generate_circle_mission(center_lat, center_lon, num_points, altitude, radius=50):
     mission = []
@@ -236,12 +237,12 @@ async def drone_task(drone_mav, mission_waypoints, altitude):
     return
 
 
-async def connect_drone(port):
+async def connect_drone(connection_string):
     """
     Функция подключения к дрону.
     """
-    print(f"Connecting to {port}...")
-    drone = mavutil.mavlink_connection(port)
+    print(f"Connecting to {connection_string}...")
+    drone = mavutil.mavlink_connection(connection_string)
 
     print("Waiting for heartbeat...")
     await asyncio.to_thread(drone.wait_heartbeat)
@@ -333,18 +334,20 @@ async def monitor_and_land(drone, num_points):
 
 
 # Основная асинхронная функция
-async def main():
-    # HARD-CODE порты
-    PORTS = ["udpin:127.0.0.1:14550", "udpin:127.0.0.1:14560"]
+async def main(num_drones):
+    # BASE_TCP_PORT = 5770
+    BASE_UDP_PORT = 14551
+    ports = [f"udpin:127.0.0.1:{BASE_UDP_PORT + i * 10}" for i in range(num_drones)]
     
     # Подключение ко всем дронам конкурентно
-    connection_tasks = [connect_drone(port) for port in PORTS]
+    connection_tasks = [connect_drone(port) for port in ports]
     drones_connected = await asyncio.gather(*connection_tasks)
 
     drones = [d for d in drones_connected if d is not None]
     if not drones:
-        print("No drones connected. Exiting.")
+        print("Нет успешных соединений. Закрытие программы.")
         return
+    print(f"Подключились к {len(drones)} дронам.")
 
     # Генерируем миссию для каждого дрона
     missions = [] # Массив с миссиями типа (lat1, lon1), (lat2, lon2), (lat3, lon3), ...
@@ -389,101 +392,10 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        parser = argparse.ArgumentParser(description='Запуск мира Webots с N дронами и SITL')
+        parser.add_argument('--drones', type=int, default=2, help='Количество дронов')
+        args = parser.parse_args()
+        asyncio.run(main(args.drones))
     except KeyboardInterrupt:
         print("Script interrupted by user.")
     
-    #####################################################################
-'''
-    drones = connect_drones()
-
-    # Ожидание сообщения GLOBAL_POSITION_INT
-    base_drone = drones[0]
-    global_pos_msg = base_drone.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=10)
-    if global_pos_msg is None:
-        print("Failed to get position message. Exiting.")
-        exit(1)
-    base_lat = global_pos_msg.lat / 1e7
-    base_lon = global_pos_msg.lon / 1e7
-
-    # Высота взлёта
-    altitude=20
-    
-    # Общее количество точек (без учёта взлёта и посадки)
-    num_points=8
-
-    # Генерируем точки полётного задания
-    mission_waypoints = generate_circle_mission(base_lat, base_lon, altitude, num_points, radius=10)
-    print(f"ТОЧЕЧКИ: {mission_waypoints}")
-
-    for drone in drones:
-        print(f"Uploading mission to drone {drone.target_system}")
-        upload_mission(drone, mission_waypoints)
-        time.sleep(1)
-
-        # Переключаемся в GUIDED
-        set_mode(drone, 'GUIDED')
-
-        # Взводим моторы
-        print(f"Arming drone {drone.target_system}...")
-        drone.arducopter_arm()
-        time.sleep(3)  # Ждём, пока моторы взведутся
-
-        # Производим взлёт
-        print(f"Requesting takeoff to {altitude} meters")
-        drone.mav.command_long_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-        0,
-        0,  # Параметр 1 - Минимальный шаг (при наличии датчика воздушной скорости), желаемый шаг без датчика
-        0,  # Параметры 2-3: пустые
-        0,
-        0,  # Параметр 4 - YAW
-        0,  # Параметр 5 - Latitude
-        0,  # Параметр 6 - Longitude
-        altitude)  # Параметр 7 - высота
-
-        # Ожидаем подтверждения команды на взлёт
-        wait_command_ack(drone, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF)
-
-        # Проверка достижения заданной высоты
-        if not wait_for_altitude(drone, altitude):
-            print("Drone failed to reach takeoff altitude. Aborting mission.")
-            # Добавить логику для безопасной посадки или повторной попытки
-            exit()
-
-        print("Takeoff successful. Drone at 20m.")
-
-
-        # Переключаемся в AUTO для выполнения миссии
-        set_mode(drone, 'AUTO')
-        print(f"Drone {drone.target_system} set to AUTO mode")
-
-        # Ожидаем завершения миссии
-        print("Drone set to AUTO mode. Waiting for mission completion.")
-        if not wait_for_mission_completion(drone, num_points):
-            print("Mission did not complete in time. Aborting.")
-            # Добавить логику для безопасной посадки или повторной попытки
-            exit()
-
-        print("Mission completed successfully.")
-
-        # Производим посадку
-        print(f"Requesting landing")
-        drone.mav.command_long_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_CMD_NAV_LAND,
-        0,
-        0,  # Параметр 1 - Минимальная целевая высота, если посадка отменена (0 = не определено/использовать системные настройки по умолчанию)
-        0,  # Параметр 2 - Режим точного приземления
-        0,  # Параметр 3 - Пустой
-        0,  # Параметр 4 - YAW
-        0,  # Параметр 5 - Latitude
-        0,  # Параметр 6 - Longitude
-        0)  # Параметр 7 - Высота посадки (уровень земли в текущем кадре)
-
-        # Ожидаем подтверждения команды на посадку
-        wait_command_ack(drone, mavutil.mavlink.MAV_CMD_NAV_LAND)
-
-        # Проверка достижения нулевой высоты
-        if not wait_for_altitude(drone, 0):
-            print("Drone did not land properly.")
-        else:
-            print("Landing successful. Drone at 0m.")
-'''

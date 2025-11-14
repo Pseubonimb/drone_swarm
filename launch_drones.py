@@ -25,7 +25,8 @@ DRONES = [
         "tcp_port": 5760, # TCP-порт ДРОНА для MAVProxy
         "udp_port": 1451, # UDP-input-порт MavProxy для swarm_controller.py
         # (UDP-порты 9002 и 9003 стандартно используются SITL для взаимодействия с Webots)
-        "sysid": 1,
+        
+        "sysid": 1, ##########!!!!!!!!!!!!!!! Системный id всегда больше instance на 1 !!!!!!!!!!!!!!
         "params": ["--add-param-file=config/iris.parm"]
     },
     {
@@ -33,7 +34,8 @@ DRONES = [
         "tcp_port": 5770, # TCP-порт ДРОНА для MAVProxy
         "udp_port": 1461, # UDP-input-порт MavProxy для swarm_controller.py
         # (UDP-порты 9012 и 9013 стандартно используются SITL для взаимодействия с Webots)
-        "sysid": 2,
+        
+        "sysid": 2,  ##########!!!!!!!!!!!!!!! Системный id всегда больше instance на 1 !!!!!!!!!!!!!!
         "params": ["--add-param-file=config/iris.parm"]
     }
 ]
@@ -90,9 +92,9 @@ if __name__ == "__main__":
         time.sleep(5)  # Пауза между запусками
 
     # Запуск контроллера роя
-    print("Starting swarm controller...")
-    swarm_process = subprocess.Popen(["python", "swarm_controller.py"])
-    processes.append(swarm_process)
+    # print("Starting swarm controller...")
+    # swarm_process = subprocess.Popen(["python", "swarm_controller.py"])
+    # processes.append(swarm_process)
 
     # Ждём завершения (Ctrl+C)
     try:

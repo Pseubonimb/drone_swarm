@@ -24,6 +24,7 @@ PROTO Iris [
     synchronization IS synchronization
     name IS name
     children [
+      
       Group {
         children IS extensionSlot
       }
@@ -158,4 +159,6 @@ PROTO Iris [
       ]
     }
   }
+  
+  
 }
