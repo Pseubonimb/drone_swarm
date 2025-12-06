@@ -81,7 +81,7 @@ def start_sim_vehicle(instance, tcp_port, udp_port, params=None):
         f"--out=127.0.0.1:{tcp_port}",  # TCP для MAVProxy
         f"--out=127.0.0.1:{udp_port}",  # Для swarm_controller.py (UDP)
         "--console",
-        "--map"
+        #"--map"
     ]
     if params:
         args += params

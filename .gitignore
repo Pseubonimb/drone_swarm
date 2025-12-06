@@ -11,5 +11,10 @@ mav.tlog
 mav.tlog.raw
 mav_2_1.parm
 controllers/ardupilot_vehicle_controller/__pycache__
+RC_OVERRIDE/RC_Following/__pycache__
 logs
-
+dumpcore.sh_arducopter.23709.out
+dumpstack.sh_arducopter.23709.out
+mav_0_1.parm
+controllers/ardupilot_vehicle_controller/__pycache__/webots_vehicle.cpython-312.pyc
+RC_OVERRIDE/Square with POS_HOLD default PID/
