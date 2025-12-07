@@ -143,14 +143,16 @@ class DroneController:
         rel_pos = self.coords_monitor.get_relative_position(target_position)
         
         # Вычисляем расстояние до цели
-        error_x = rel_pos['x']  # Ошибка по X (восток-запад)
-        error_y = rel_pos['y']  # Ошибка по Y (север-юг)
+        # В NED: x = север, y = восток
+        error_x = rel_pos['x']  # Ошибка по северу-югу (x в NED)
+        error_y = rel_pos['y']   # Ошибка по востоку-западу (y в NED)
         distance = (error_x**2 + error_y**2)**0.5
         
         # Получаем текущую скорость
         current_velocity = self.velocity_monitor.get_velocity()
-        current_x_velocity = current_velocity['vx']
-        current_y_velocity = current_velocity['vy']
+        # В NED: vx = север, vy = восток
+        current_x_velocity = current_velocity['vx']  # Скорость на север
+        current_y_velocity = current_velocity['vy']     # Скорость на восток
         
         # Если близко к цели ИЛИ скорость достаточно мала - применяем торможение
         if distance < distance_threshold:
@@ -158,27 +160,29 @@ class DroneController:
             target_velocity = 0.0
             
             # П-регулирование: ошибка * коэффициент = интенсивность торможения
-            error_vx = target_velocity - current_x_velocity
-            error_vy = target_velocity - current_y_velocity
+            error_vx = target_velocity - current_x_velocity  # Ошибка скорости на север
+            error_vy = target_velocity - current_y_velocity    # Ошибка скорости на восток
             
             # Вычисляем интенсивность торможения для каждого канала
             brake_intensity_x = 0
             brake_intensity_y = 0
             
+            # Торможение по северу-югу управляет pitch (вперёд-назад)
             if kpx_brake > 0 and abs(error_vx) > 0.01:
                 brake_intensity_x = int(abs(error_vx) * kpx_brake)
                 brake_intensity_x = min(500, max(50, brake_intensity_x))
-                # Направление торможения по X: если error_vx > 0 (движение на восток), тормозим на запад
-                brake_direction_x = -1 if error_vx > 0 else 1
+                # Направление торможения: если error_vx > 0 (движение на север), тормозим на юг
+                brake_direction_x = 1 if error_vx > 0 else -1
                 brake_pitch = neutral + (brake_direction_x * brake_intensity_x)
             else:
                 brake_pitch = neutral  # Не применяем торможение по pitch
             
+            # Торможение по востоку-западу управляет roll (влево-вправо)
             if kpy_brake > 0 and abs(error_vy) > 0.01:
                 brake_intensity_y = int(abs(error_vy) * kpy_brake)
                 brake_intensity_y = min(500, max(50, brake_intensity_y))
-                # Направление торможения по Y: если error_vy > 0 (движение на север), тормозим на юг
-                brake_direction_y = 1 if error_vy > 0 else -1
+                # Направление торможения: если error_vy > 0 (движение на восток), тормозим на запад
+                brake_direction_y = -1 if error_vy > 0 else 1
                 brake_roll = neutral + (brake_direction_y * brake_intensity_y)
             else:
                 brake_roll = neutral  # Не применяем торможение по roll
@@ -186,17 +190,28 @@ class DroneController:
             # Применяем торможение
             send_rc_override(self.master, brake_roll, brake_pitch, neutral, neutral)
             
+            # Вывод информации о регуляторе roll только для преследователя
+            if self.config.get('role') == 'follower':
+                print(f"Roll regulator input (error_y): {error_vy:.3f}, Roll output: {brake_roll}")
+            
             return {
                 'roll': brake_roll,
                 'pitch': brake_pitch,
                 'distance': distance,
                 'mode': 'braking',
                 'velocity_x': current_x_velocity,
-                'velocity_y': current_y_velocity
+                'velocity_y': current_y_velocity,
+                'error_x': error_x,
+                'error_y': error_y,
+                'error_vx': error_vx,
+                'error_vy': error_vy,
+                'intensity_x': brake_intensity_x,
+                'intensity_y': brake_intensity_y
             }
         else:
             # Режим движения к цели: используем П-регулятор на основе позиции
             # П-регулирование
+            # error_x управляет pitch (вперёд-назад), error_y управляет roll (влево-вправо)
             intensity_x = int(abs(error_x) * kp)
             intensity_y = int(abs(error_y) * kp)
             
@@ -205,24 +220,30 @@ class DroneController:
             intensity_y = min(max_intensity, intensity_y)
             
             # Определяем направление
-            if abs(error_x) > 0.1:  # Порог для движения по X
-                if error_x > 0:
-                    roll = neutral - intensity_x  # Вправо (на восток)
-                else:
-                    roll = neutral + intensity_x  # Влево (на запад)
+            # Roll управляет движением влево-вправо (восток-запад)
+            if abs(error_y) > 0.1:  # Порог для движения по востоку-западу
+                if error_y > 0:  # Цель восточнее - двигаемся на восток (вправо)
+                    roll = neutral - intensity_y
+                else:  # Цель западнее - двигаемся на запад (влево)
+                    roll = neutral + intensity_y
             else:
                 roll = neutral
             
-            if abs(error_y) > 0.1:  # Порог для движения по Y
-                if error_y > 0:
-                    pitch = neutral - intensity_y  # Вперёд (на север)
-                else:
-                    pitch = neutral + intensity_y  # Назад (на юг)
+            # Pitch управляет движением вперёд-назад (север-юг)
+            if abs(error_x) > 0.1:  # Порог для движения по северу-югу
+                if error_x > 0:  # Цель севернее - двигаемся на север (вперёд)
+                    pitch = neutral - intensity_x
+                else:  # Цель южнее - двигаемся на юг (назад)
+                    pitch = neutral + intensity_x
             else:
                 pitch = neutral
             
             # Отправляем команду
             send_rc_override(self.master, roll, pitch, neutral, neutral)
+            
+            # Вывод информации о регуляторе roll только для преследователя
+            if self.config.get('role') == 'follower':
+                print(f"Roll regulator input (error_y): {error_y:.3f}, Roll output: {roll}")
             
             return {
                 'roll': roll,
@@ -230,7 +251,11 @@ class DroneController:
                 'distance': distance,
                 'mode': 'moving',
                 'velocity_x': current_x_velocity,
-                'velocity_y': current_y_velocity
+                'velocity_y': current_y_velocity,
+                'error_x': error_x,
+                'error_y': error_y,
+                'intensity_x': intensity_x,
+                'intensity_y': intensity_y
             }
     
     def move_with_pid_braking(self, direction, kpx=2000, kpy=2000,
@@ -251,24 +276,20 @@ class DroneController:
         roll, pitch, throttle, yaw = direction
         
         # Движение
-        direction_name = "Forward" if pitch > neutral else "Backward" if pitch < neutral else \
-                         "Right" if roll > neutral else "Left" if roll < neutral else "Unknown"
-        print(f"[Drone {self.config['id']}] Moving {direction_name}: roll={roll}, pitch={pitch}")
-        
         start = time.time()
         while time.time() - start < move_duration:
             send_rc_override(self.master, roll, pitch, throttle, yaw)
             time.sleep(0.1)
         
         # П-регулирование для торможения
-        print(f"[Drone {self.config['id']}] Starting P-control braking...")
         start_time = time.time()
         
         while time.time() - start_time < max_brake_time:
             # Получаем текущую скорость
             current_velocity = self.velocity_monitor.get_velocity()
-            current_x_velocity = current_velocity['vx']
-            current_y_velocity = current_velocity['vy']
+            # В NED: vx = север, vy = восток
+            current_x_velocity = current_velocity['vx']  # Скорость на север
+            current_y_velocity = current_velocity['vy']   # Скорость на восток
             
             # Если скорость достаточно мала, прекращаем
             if abs(current_x_velocity) < velocity_threshold and abs(current_y_velocity) < velocity_threshold:
@@ -276,33 +297,40 @@ class DroneController:
                 break
             
             # П-регулирование: ошибка * коэффициент = интенсивность торможения
-            error_x = target_velocity - current_x_velocity
-            error_y = target_velocity - current_y_velocity
+            error_vx = target_velocity - current_x_velocity  # Ошибка скорости на север
+            # print(f"error_vx{error_vx} = target_velocity{target_velocity} - current_x_velocity{current_x_velocity}")
+            error_vy = target_velocity - current_y_velocity    # Ошибка скорости на восток
             
             # Вычисляем интенсивность торможения для каждого канала
             brake_intensity_x = 0
             brake_intensity_y = 0
             
+            # Торможение по северу-югу управляет pitch (вперёд-назад)
             if kpx > 0:
-                brake_intensity_x = int(abs(error_x) * kpx)
+                brake_intensity_x = int(abs(error_vx) * kpx)
                 brake_intensity_x = min(500, max(50, brake_intensity_x))
-                # Направление торможения по X: если error_x > 0 (движение на восток), тормозим на запад
-                brake_direction_x = -1 if error_x > 0 else 1
+                # Направление торможения: если error_vx > 0 (движение на север), тормозим на юг
+                brake_direction_x = 1 if error_vx > 0 else -1
                 brake_pitch = neutral + (brake_direction_x * brake_intensity_x)
             else:
                 brake_pitch = neutral  # Не применяем торможение по pitch
             
+            # Торможение по востоку-западу управляет roll (влево-вправо)
             if kpy > 0:
-                brake_intensity_y = int(abs(error_y) * kpy)
+                brake_intensity_y = int(abs(error_vy) * kpy)
                 brake_intensity_y = min(500, max(50, brake_intensity_y))
-                # Направление торможения по Y: если error_y > 0 (движение на север), тормозим на юг
-                brake_direction_y = 1 if error_y > 0 else -1
+                # Направление торможения: если error_vy > 0 (движение на восток), тормозим на запад
+                brake_direction_y = -1 if error_vy > 0 else 1
                 brake_roll = neutral + (brake_direction_y * brake_intensity_y)
             else:
                 brake_roll = neutral  # Не применяем торможение по roll
             
             # Применяем торможение
             send_rc_override(self.master, brake_roll, brake_pitch, neutral, neutral)
+            
+            # Вывод информации о регуляторе скорости для лидера (движение вперёд-назад)
+            # if self.config.get('role') == 'leader':
+                # print(f"Speed regulator input (error_vx): {error_vx:.3f}, Pitch output: {brake_pitch}")
             
             time.sleep(0.05)
     
@@ -390,15 +418,6 @@ def follower_loop(controller, target_drone_id, kp=500.0, max_intensity=200,
             kpx_brake=kpx_brake,
             kpy_brake=kpy_brake
         )
-        
-        distance = result['distance']
-        mode = result.get('mode', 'unknown')
-        
-        # Выводим информацию каждые 10 итераций, чтобы не засорять консоль
-        if iteration % 10 == 0:
-            print(f"Follower: Distance={distance:.2f}m, Mode={mode}, "
-                  f"vx={result.get('velocity_x', 0):.3f}m/s, vy={result.get('velocity_y', 0):.3f}m/s, "
-                  f"roll={result['roll']}, pitch={result['pitch']}")
         
         time.sleep(0.1)  # Обновление каждые 100мс
 

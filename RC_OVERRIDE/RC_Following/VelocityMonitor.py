@@ -41,8 +41,8 @@ class VelocityMonitor:
                 if msg:
                     with self.lock:
                         # В GLOBAL_POSITION_INT: vx, vy - скорости в см/с
-                        self.velocity_ned['vx'] = msg.vx / 100.0
-                        self.velocity_ned['vy'] = msg.vy / 100.0
+                        self.velocity_ned['vx'] = -msg.vx / 100.0 #Почему-то скорость при движении вперёд была отрицательной
+                        self.velocity_ned['vy'] = -msg.vy / 100.0 #Такая же фигня
                         self.velocity_ned['vz'] = msg.vz / 100.0 if hasattr(msg, 'vz') else 0.0
 
             except Exception as e:
@@ -70,11 +70,11 @@ class VelocityMonitor:
             vx, vy, vz = self.velocity_ned['vx'], self.velocity_ned['vy'], self.velocity_ned['vz']
         
         # Вычисляем скорость в направлении движения
-        # В NED системе: vx - восток (положительное = на восток), vy - север (положительное = на север)
-        # Для движения вперёд (pitch > neutral) нужна скорость на север (vy)
-        # Для движения назад (pitch < neutral) нужна скорость на юг (-vy)
-        # Для движения вправо (roll > neutral) нужна скорость на восток (vx)
-        # Для движения влево (roll < neutral) нужна скорость на запад (-vx)
+        # В NED системе: vx - север (positive north), vy - восток (positive east)
+        # Для движения вперёд (pitch > neutral) нужна скорость на север (vx)
+        # Для движения назад (pitch < neutral) нужна скорость на юг (-vx)
+        # Для движения вправо (roll > neutral) нужна скорость на восток (vy)
+        # Для движения влево (roll < neutral) нужна скорость на запад (-vy)
         
         if pitch > neutral:  # Вперёд (на север)
             # Положительная скорость = движение вперёд

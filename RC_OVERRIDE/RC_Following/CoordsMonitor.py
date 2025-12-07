@@ -37,12 +37,12 @@ class CoordsMonitor:
                 msg = self.drone.recv_match(type='LOCAL_POSITION_NED', blocking=False, timeout=0.1)
                 if msg:
                     with self.lock:
-                        # В LOCAL_POSITION_NED: x, y, z - координаты в метрах
-                        # x - восток (положительное = на восток)
-                        # y - север (положительное = на север)
-                        # z - вниз (положительное = вниз, отрицательное = вверх)
+                        # В LOCAL_POSITION_NED: x, y, z - координаты в метрах (NED система координат)
+                        # x - север (positive north)
+                        # y - восток (positive east)
+                        # z - вниз (positive down)
                         self.position_ned['x'] = msg.x
-                        self.position_ned['y'] = msg.y
+                        self.position_ned['y'] = -msg.y
                         self.position_ned['z'] = msg.z
 
             except Exception as e:
