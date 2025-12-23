@@ -1,7 +1,5 @@
 #!/home/user/Documents/Kursach/drone_swarm_simulation/drone_env/bin/python3
 
-from __future__ import print_function
-
 '''
 log analysis program
 Andrew Tridgell December 2014
@@ -127,6 +125,7 @@ class MEState(object):
             "set"       : ["(SETTING)"],
             "condition" : ["(VARIABLE)"],
             "graph"     : ['(VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE)'],
+            "graphs"    : ['(PREDEFINED_GRAPH)'],
             "dump"      : ['(MESSAGETYPE)', '--verbose (MESSAGETYPE)'],
             "map"       : ['(VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE) (VARIABLE)'],
             "param"     : ['download', 'check', 'help (PARAMETER)', 'save', 'savechanged', 'diff', 'show', 'check'],
@@ -347,7 +346,8 @@ def load_graphs():
             continue
         # skip parameter files.  They specify an encoding, and under
         # Python3 this leads to a warning from etree
-        if os.path.basename(file) in ["ArduSub.xml", "ArduPlane.xml", "APMrover2.xml", "ArduCopter.xml", "AntennaTracker.xml", "Blimp.xml", "Rover.xml"]:
+        if os.path.basename(file) in ["ArduSub.xml", "ArduPlane.xml", "APMrover2.xml", "ArduCopter.xml",
+                                      "AntennaTracker.xml", "Blimp.xml", "Rover.xml", "Heli.xml"]:
             continue
         graphs = load_graph_xml(open(file).read(), file)
         if graphs:
@@ -372,6 +372,11 @@ def load_graphs():
                 mestate.graphs.extend(graphs)
                 mestate.console.writeln("Loaded %s" % f)
     mestate.graphs = sorted(mestate.graphs, key=lambda g: g.name)
+    # Update completions with actual graph names
+    if len(mestate.graphs) > 0:
+        # Some default graph names have spaces: replace with -
+        graph_names = [g.name.replace(' ', '-') for g in mestate.graphs]
+        mestate.completions["graphs"] = graph_names
 
 def flightmode_colours():
     '''return mapping of flight mode to colours'''
@@ -440,6 +445,40 @@ def cmd_graph(args):
         #print("initial: ", xlimits.last_xlim)
         grui[-1].set_xlim(xlimits.last_xlim)
 
+def cmd_graphs(args):
+    '''graphs command'''
+    usage = "usage: graphs <PREDEFINED_GRAPH_NAME>"
+    if len(args) < 1:
+        print(usage)
+        return
+    check_vehicle_type()
+    graph_name = ' '.join(args)
+
+    # Normalize search term and graph names by replacing spaces with dashes
+    normalized_search = graph_name.replace(' ', '-').upper()
+
+    # Find matching predefined graph
+    matching_graphs = [g for g in mestate.graphs if normalized_search in g.name.replace(' ', '-').upper()]
+    if not matching_graphs:
+        print("No predefined graph found matching: %s" % graph_name)
+        return
+
+    # Display the first matching graph
+    g = matching_graphs[0]
+    mestate.console.write("Added predefined graph: %s\n" % g.name)
+    if g.description:
+        mestate.console.write("%s\n" % g.description, fg='blue')
+    mestate.rl.add_history("graphs %s" % g.name)
+    mestate.last_graph = g
+    if mestate.settings.debug > 0:
+        print("Adding graph: %s" % mestate.last_graph.expression)
+    grui.append(Graph_UI(mestate))
+    grui[-1].display_graph(mestate.last_graph, flightmode_colours())
+    global xlimits
+    if xlimits.last_xlim is not None and mestate.settings.sync_xzoom:
+        #print("initial: ", xlimits.last_xlim)
+        grui[-1].set_xlim(xlimits.last_xlim)
+
 map_timelim_pipes = []
 
 def cmd_map(args):
@@ -453,10 +492,17 @@ def cmd_map(args):
     options._flightmodes = mestate.mlog._flightmodes
     options.show_flightmode_legend = mestate.settings.show_flightmode
     options.colour_source='flightmode'
-    options.nkf_sample = 1
+
+    # check for kml or kmz
+    for a in args:
+        if a.endswith('.kml') or a.endswith('.kmz'):
+            options.kml = a
+            args = list(filter(lambda x : x != a, args))
+            break
     if len(args) > 0:
         options.types = ':'.join(args)
-        if len(options.types) > 1:
+        filtered_args = list(filter(lambda x : x != "CMD", options.types))
+        if len(filtered_args) > 1:
             options.colour_source='type'
     mfv_mav_ret = mavflightview.mavflightview_mav(mestate.mlog, options, mestate.flightmode_selections)
     if mfv_mav_ret is None:
@@ -522,6 +568,7 @@ def cmd_stats(args):
 
 def cmd_dump(args):
     '''dump messages from log'''
+    import re
     global xlimits
 
     # understand --verbose to give as much information about message as possible
@@ -533,17 +580,27 @@ def cmd_dump(args):
     if len(args) > 0:
         wildcard = args[0]
     else:
-        print("Usage: dump PATTERN")
+        print("Usage: dump MSG1,MSG2[0]...")
         return
     mlog = mestate.mlog
     mlog.rewind()
-    types = []
-    for p in wildcard.split(','):
-        for t in mlog.name_to_id.keys():
-            if fnmatch.fnmatch(t, p):
-                types.extend([t])
+    types_inst = []
+    types_filt_inst_id = []
+    types_inst_no_id = []
+    for t in wildcard.split(','):
+                #remove instance id if it exists
+                t2 = re.sub(r'\[.*\]', '', t)
+                types_filt_inst_id.extend([t2])
+                if t.find('[') != -1:
+                    # add message with instance id to instances list
+                    types_inst.extend([t])
+                    types_inst_no_id.extend([t2])
+
+    #begin first dump msg on new line
+    print("")
+    ext = False
     while True:
-        msg = mlog.recv_match(type=types, condition=mestate.settings.condition)
+        msg = mlog.recv_match(type=types_filt_inst_id, condition=mestate.settings.condition)
         if msg is None:
             break
         in_range = xlimits.timestamp_in_range(msg._timestamp)
@@ -551,12 +608,31 @@ def cmd_dump(args):
             continue
         if in_range > 0:
             continue
+
+        instid = None
+        if msg.get_type() in types_inst_no_id:
+            if msg.fmt.instance_field is not None:
+                idx = types_inst_no_id.index(msg.get_type())
+                type_inst = types_inst[idx]
+                instid = re.sub(r'.*\[', '', type_inst)
+                instid = re.sub(r'\]', '', instid)
+            else:
+                print(f"{msg.get_type()} is not instance.")
+                ext = True
+        if ext:
+            break
+
         if verbose and "pymavlink.dialects" in str(type(msg)):
             mavutil.dump_message_verbose(sys.stdout, msg)
         elif verbose and hasattr(msg,"dump_verbose"):
             msg.dump_verbose(sys.stdout)
         else:
-            print("%s %s" % (timestring(msg), msg))
+            if instid is not None:
+                inst = getattr(msg, msg.fmt.instance_field, None)
+                if str(inst) == instid:
+                    print("%s %s" % (timestring(msg), msg))  
+            else:
+                print("%s %s" % (timestring(msg), msg))
     mlog.rewind()
 
 mfit_tool = None
@@ -725,9 +801,13 @@ events = {
     73 : "DATA_LAND_REPO_ACTIVE",
     74 : "DATA_STANDBY_ENABLE",
     75 : "DATA_STANDBY_DISABLE",
+    76 : "FENCE_ALT_MAX_ENABLE",
+    77 : "FENCE_ALT_MAX_DISABLE",
 
     80 : "FENCE_FLOOR_ENABLE",
     81 : "FENCE_FLOOR_DISABLE",
+    82 : "FENCE_POLYGON_ENABLE",
+    83 : "FENCE_POLYGON_DISABLE",
 
     85 : "EK3_SOURCES_SET_TO_PRIMARY",
     86 : "EK3_SOURCES_SET_TO_SECONDARY",
@@ -1166,7 +1246,7 @@ def cmd_param(args):
             verbose = True
     else:
         wildcard = '*'
-    k = sorted(mlog.params.keys())
+    k = mp_util.sorted_natural(mlog.params.keys())
     for p in k:
         if fnmatch.fnmatch(str(p).upper(), wildcard.upper()):
             s = "%-16.16s %f" % (str(p), mlog.params[p])
@@ -1521,6 +1601,7 @@ def main_loop():
 
 command_map = {
     'graph'      : (cmd_graph,     'display a graph'),
+    'graphs'     : (cmd_graphs,    'display a predefined graph'),
     'set'        : (cmd_set,       'control settings'),
     'reload'     : (cmd_reload,    'reload graphs'),
     'save'       : (cmd_save,      'save a graph'),

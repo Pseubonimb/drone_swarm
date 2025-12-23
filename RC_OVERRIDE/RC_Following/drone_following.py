@@ -21,8 +21,107 @@ DRONES_CONFIG = [
 # Значения для управления
 neutral = 1500
 
-def send_rc_override(drone, chan1, chan2, chan3, chan4):
-    """Отправка RC_OVERRIDE команды дрону."""
+class PIDRegulator:
+    """
+    PID-регулятор с поддержкой пропорциональной, интегральной и дифференциальной составляющих.
+    Включает механизм anti-windup для предотвращения переполнения интегральной составляющей.
+    """
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, integral_limit=1000.0, output_limit=500.0):
+        """
+        Инициализация PID-регулятора.
+        
+        Args:
+            kp: пропорциональный коэффициент
+            ki: интегральный коэффициент
+            kd: дифференциальный коэффициент
+            integral_limit: максимальное значение интегральной составляющей (anti-windup)
+            output_limit: максимальное значение выходного сигнала
+        """
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.integral_limit = integral_limit
+        self.output_limit = output_limit
+        
+        self.integral = 0.0
+        self.last_error = 0.0
+        self.last_time = None
+    
+    def update(self, error, dt=None):
+        """
+        Обновление регулятора с новой ошибкой.
+        
+        Args:
+            error: текущая ошибка
+            dt: временной интервал (если None, вычисляется автоматически)
+        
+        Returns:
+            Выходное значение регулятора
+        """
+        current_time = time.time()
+        
+        if dt is None: # Ещё желательно синхронизировать временной интервал с шагом времени симуляции Webots
+            if self.last_time is None:
+                dt = 0.1  # Первый вызов - используем стандартный интервал
+            else:
+                dt = current_time - self.last_time
+                if dt <= 0:
+                    dt = 0.1  # Защита от нулевого или отрицательного интервала
+        
+        self.last_time = current_time
+        
+        # Пропорциональная составляющая
+        p_term = self.kp * error
+        
+        # Интегральная составляющая с anti-windup
+        self.integral += error * dt
+        # Ограничение интегральной составляющей (anti-windup)
+        if self.integral_limit > 0:
+            self.integral = max(-self.integral_limit, min(self.integral_limit, self.integral))
+        i_term = self.ki * self.integral
+        
+        # Дифференциальная составляющая
+        if dt > 0:
+            derivative = (error - self.last_error) / dt
+        else:
+            derivative = 0.0
+        d_term = self.kd * derivative
+        
+        self.last_error = error
+        
+        # Суммарный выход
+        output = p_term + i_term + d_term
+        
+        # Ограничение выходного сигнала
+        output = max(-self.output_limit, min(self.output_limit, output))
+        
+        return output
+    
+    def reset(self):
+        """Сброс состояния регулятора (интегральной и дифференциальной составляющих)."""
+        self.integral = 0.0
+        self.last_error = 0.0
+        self.last_time = None
+    
+    def set_integral(self, value):
+        """Установка значения интегральной составляющей."""
+        if self.integral_limit > 0:
+            self.integral = max(-self.integral_limit, min(self.integral_limit, value))
+        else:
+            self.integral = value
+
+def send_rc_override(drone, chan1, chan2, chan3, chan4, controller=None):
+    """
+    Отправка RC_OVERRIDE команды дрону.
+    
+    Args:
+        drone: объект MAVLink соединения
+        chan1: roll / aileron (left/right)
+        chan2: pitch / elevator (forward/back)
+        chan3: throttle
+        chan4: yaw / rudder (rotation)
+        controller: объект DroneController (опционально, для обновления последних значений)
+    """
     drone.mav.rc_channels_override_send(
         drone.target_system,
         drone.target_component,
@@ -32,16 +131,58 @@ def send_rc_override(drone, chan1, chan2, chan3, chan4):
         chan4,  # yaw / rudder (rotation)
         0, 0, 0, 0, 0, 0  # остальные каналы без изменений
     )
+    
+    # Обновляем последние значения для keepalive (если передан контроллер)
+    if controller is not None:
+        with controller.rc_channels_lock:
+            controller.last_rc_channels['roll'] = chan1
+            controller.last_rc_channels['pitch'] = chan2
+            controller.last_rc_channels['throttle'] = chan3
+            controller.last_rc_channels['yaw'] = chan4
 
 class DroneController:
     """Класс для управления одним дроном."""
-    def __init__(self, config):
+    def __init__(self, config, logging=False):
         self.config = config
         self.master = None
         self.coords_monitor = None
         self.velocity_monitor = None
         self.other_drones_positions = {}  # Словарь для хранения позиций других дронов
         self.lock = threading.Lock()
+
+        self.logging = logging # ЛОГИРОВАНИЕ КООРДИНАТ
+
+        if self.logging:
+            self.logIter = 0
+            self.logfile = open(f"logs/drone_{self.config['id']}_log.txt", "w")
+        
+        # PID-регуляторы для управления углами (торможение)
+        # Roll регулятор (для компенсации дрейфа влево-вправо)
+        self.roll_velocity_pid = PIDRegulator(kp=100.0, ki=100.0, kd=0.0, 
+                                               integral_limit=200.0, output_limit=500.0)
+        # Pitch регулятор (для компенсации дрейфа вперёд-назад)
+        self.pitch_velocity_pid = PIDRegulator(kp=100.0, ki=0.0, kd=0.0,
+                                                integral_limit=200.0, output_limit=500.0)
+        
+        # PID-регуляторы для управления позицией (движение к цели)
+        # Roll позиционный регулятор
+        self.roll_position_pid = PIDRegulator(kp=100.0, ki=10.0, kd=0.0,
+                                               integral_limit=100.0, output_limit=200.0)
+        # Pitch позиционный регулятор
+        self.pitch_position_pid = PIDRegulator(kp=100.0, ki=10.0, kd=0.0,
+                                                integral_limit=100.0, output_limit=200.0)
+        
+        # Флаг для отслеживания режима движения (для сброса интегральной составляющей при смене режима)
+        self.last_movement_mode = None
+        
+        # Последние значения RC каналов для keepalive (чтобы не конфликтовать с активным управлением)
+        self.last_rc_channels = {
+            'roll': neutral,
+            'pitch': neutral,
+            'throttle': neutral,
+            'yaw': neutral
+        }
+        self.rc_channels_lock = threading.Lock()
     
     def connect(self):
         """Подключение к дрону."""
@@ -75,7 +216,7 @@ class DroneController:
 
         print(f"[Drone {self.config['id']}] Setting mode ALT_HOLD")
         self.master.set_mode(2)  # ALT_HOLD
-        send_rc_override(self.master, neutral, neutral, neutral, neutral)
+        send_rc_override(self.master, neutral, neutral, neutral, neutral, controller=self)
         time.sleep(0.5)
         
         # Запуск мониторинга
@@ -87,14 +228,22 @@ class DroneController:
         """
         Запуск потока для непрерывной отправки RC_OVERRIDE.
         Это предотвращает истечение RC_OVERRIDE_TIME (3 секунды по умолчанию).
-        Keepalive отправляет нейтральные значения для поддержания связи.
+        Keepalive отправляет последние актуальные значения RC каналов, чтобы не конфликтовать
+        с активным управлением.
         """
         def keepalive_loop():
             while True:
                 try:
-                    # Отправляем нейтральные значения для поддержания связи
-                    # Это предотвращает истечение RC_OVERRIDE_TIME
-                    send_rc_override(self.master, neutral, neutral, neutral, neutral)
+                    # Получаем последние актуальные значения RC каналов
+                    with self.rc_channels_lock:
+                        roll = self.last_rc_channels['roll']
+                        pitch = self.last_rc_channels['pitch']
+                        throttle = self.last_rc_channels['throttle']
+                        yaw = self.last_rc_channels['yaw']
+                    
+                    # Отправляем последние значения для поддержания связи
+                    # Это предотвращает истечение RC_OVERRIDE_TIME и не конфликтует с активным управлением
+                    send_rc_override(self.master, roll, pitch, throttle, yaw)
                     time.sleep(0.2)  # Отправляем каждые 200мс (5 раз в секунду, достаточно для 3 сек таймаута)
                 except Exception as e:
                     print(f"[Drone {self.config['id']}] Error in RC keepalive: {e}")
@@ -111,7 +260,12 @@ class DroneController:
     
     def get_my_position(self):
         """Получить свою позицию."""
-        return self.coords_monitor.get_position()
+        my_position = self.coords_monitor.get_position()
+        if self.logging:
+            self.logIter += 1
+            if self.logIter % 20 == 0:
+                self.logfile.write(f"{my_position}\n")
+        return my_position
     
     def get_distance_to_drone(self, target_drone_id):
         """Получить расстояние до целевого дрона."""
@@ -125,27 +279,36 @@ class DroneController:
             return None
         return self.coords_monitor.get_relative_position(self.other_drones_positions[target_drone_id])
     
-    def move_towards(self, target_position, kp=500.0, max_intensity=200, 
-                     distance_threshold=0.5, kpx_brake=2000, kpy_brake=2000):
+    def move_towards(self, target_position, kp=500.0, 
+                     distance_threshold=0.5, kpx_brake=2000, kpy_brake=2000,
+                     use_pid_braking=True, ki_roll_brake=50.0, ki_pitch_brake=50.0,
+                     use_pid_moving=True, ki_roll_moving=10.0, ki_pitch_moving=10.0):
         """
-        Движение к целевой позиции с П-регулированием и автоматическим торможением.
-        Аналогично move_with_pid_braking - использует П-регулятор для торможения.
+        Движение к целевой позиции с PID-регулированием и автоматическим торможением.
         
         Args:
             target_position: словарь с ключами 'x', 'y', 'z' - целевая позиция
-            kp: пропорциональный коэффициент для движения к цели
-            max_intensity: максимальная интенсивность управления при движении
+            kp: пропорциональный коэффициент для движения к цели (используется только если use_pid_moving=False)
             distance_threshold: порог расстояния для начала торможения (м)
-            kpx_brake: пропорциональный коэффициент для торможения по X (восток-запад)
-            kpy_brake: пропорциональный коэффициент для торможения по Y (север-юг)
-            velocity_threshold: порог скорости для остановки торможения (м/с)
+            kpx_brake: пропорциональный коэффициент для торможения по X (восток-запад) - используется только если use_pid_braking=False
+            kpy_brake: пропорциональный коэффициент для торможения по Y (север-юг) - используется только если use_pid_braking=False
+            use_pid_braking: использовать ли PID-регулятор для торможения (True) или только П-регулятор (False)
+            ki_roll_brake: интегральный коэффициент для roll регулятора при торможении
+            ki_pitch_brake: интегральный коэффициент для pitch регулятора при торможении
+            use_pid_moving: использовать ли PID-регулятор для движения к цели (True) или только П-регулятор (False)
+            ki_roll_moving: интегральный коэффициент для roll регулятора при движении к цели
+            ki_pitch_moving: интегральный коэффициент для pitch регулятора при движении к цели
         """
+        
         rel_pos = self.coords_monitor.get_relative_position(target_position)
         
         # Вычисляем расстояние до цели
         # В NED: x = север, y = восток
         error_x = rel_pos['x']  # Ошибка по северу-югу (x в NED)
-        error_y = rel_pos['y']   # Ошибка по востоку-западу (y в NED)
+        error_y = rel_pos['y'] - 2 # Ошибка по востоку-западу (y в NED)
+                                    # Смещаем на 2 метра вправо    
+        
+                                    
         distance = (error_x**2 + error_y**2)**0.5
         
         # Получаем текущую скорость
@@ -154,45 +317,74 @@ class DroneController:
         current_x_velocity = current_velocity['vx']  # Скорость на север
         current_y_velocity = current_velocity['vy']     # Скорость на восток
         
-        # Если близко к цели ИЛИ скорость достаточно мала - применяем торможение
+        # Если близко к цели - применяем торможение
         if distance < distance_threshold:
-            # Режим торможения: используем П-регулятор на основе скорости
+            # Режим торможения: используем PID-регулятор на основе скорости
             target_velocity = 0.0
             
-            # П-регулирование: ошибка * коэффициент = интенсивность торможения
+            # Обновляем режим и сбрасываем интегральную составляющую при переходе в режим торможения
+            if self.last_movement_mode != 'braking':
+                self.roll_velocity_pid.reset()
+                self.pitch_velocity_pid.reset()
+                # Обновляем коэффициенты интегральной составляющей
+                self.roll_velocity_pid.ki = ki_roll_brake
+                self.pitch_velocity_pid.ki = ki_pitch_brake
+            self.last_movement_mode = 'braking'
+            
+            # Ошибки скорости
             error_vx = target_velocity - current_x_velocity  # Ошибка скорости на север
             error_vy = target_velocity - current_y_velocity    # Ошибка скорости на восток
             
-            # Вычисляем интенсивность торможения для каждого канала
-            brake_intensity_x = 0
-            brake_intensity_y = 0
+            # Используем фиксированный временной интервал для PID (примерно соответствует частоте вызова)
+            dt = 0.1
+            
+            if use_pid_braking:
+                # Используем PID-регуляторы для торможения
+                # Торможение по северу-югу управляет pitch (вперёд-назад)
+                brake_output_pitch = self.pitch_velocity_pid.update(error_vx, dt)
+                brake_intensity_x = int(abs(brake_output_pitch))
+                brake_intensity_x = min(500, max(50, brake_intensity_x))
+                brake_direction_x = -1 if error_vx > 0 else 1
+                brake_pitch = neutral + (brake_direction_x * brake_intensity_x)
+                
+                # Торможение по востоку-западу управляет roll (влево-вправо)
+                brake_output_roll = self.roll_velocity_pid.update(error_vy, dt)
+                brake_intensity_y = int(abs(brake_output_roll))
+                brake_intensity_y = min(500, max(50, brake_intensity_y))
+                brake_direction_y = 1 if error_vy > 0 else -1
+                brake_roll = neutral + (brake_direction_y * brake_intensity_y)
+            else:
+                # Старый метод с только П-регулятором (для обратной совместимости)
+                brake_intensity_x = 0
+                brake_intensity_y = 0
             
             # Торможение по северу-югу управляет pitch (вперёд-назад)
             if kpx_brake > 0 and abs(error_vx) > 0.01:
                 brake_intensity_x = int(abs(error_vx) * kpx_brake)
                 brake_intensity_x = min(500, max(50, brake_intensity_x))
-                # Направление торможения: если error_vx > 0 (движение на север), тормозим на юг
                 brake_direction_x = 1 if error_vx > 0 else -1
                 brake_pitch = neutral + (brake_direction_x * brake_intensity_x)
             else:
-                brake_pitch = neutral  # Не применяем торможение по pitch
+                    brake_pitch = neutral
             
             # Торможение по востоку-западу управляет roll (влево-вправо)
             if kpy_brake > 0 and abs(error_vy) > 0.01:
                 brake_intensity_y = int(abs(error_vy) * kpy_brake)
                 brake_intensity_y = min(500, max(50, brake_intensity_y))
-                # Направление торможения: если error_vy > 0 (движение на восток), тормозим на запад
                 brake_direction_y = -1 if error_vy > 0 else 1
                 brake_roll = neutral + (brake_direction_y * brake_intensity_y)
             else:
-                brake_roll = neutral  # Не применяем торможение по roll
+                    brake_roll = neutral
             
             # Применяем торможение
-            send_rc_override(self.master, brake_roll, brake_pitch, neutral, neutral)
+            send_rc_override(self.master, brake_roll, brake_pitch, neutral, neutral, controller=self)
             
             # Вывод информации о регуляторе roll только для преследователя
             if self.config.get('role') == 'follower':
-                print(f"Roll regulator input (error_y): {error_vy:.3f}, Roll output: {brake_roll}")
+                if use_pid_braking:
+                    print(f"Roll PID: error_vy={error_vy:.3f}, integral={self.roll_velocity_pid.integral:.3f}, output={brake_output_roll:.1f}, roll={brake_roll}")
+                else:
+                    print(f"Roll P-regulator input (error_y): {error_vy:.3f}, Roll output: {brake_roll}")
             
             return {
                 'roll': brake_roll,
@@ -208,42 +400,106 @@ class DroneController:
                 'intensity_x': brake_intensity_x,
                 'intensity_y': brake_intensity_y
             }
+        # Если далеко от цели - двигаемся к ней
         else:
-            # Режим движения к цели: используем П-регулятор на основе позиции
+            # Режим движения к цели: используем PID-регулятор на основе позиции
+            # Сбрасываем интегральную составляющую при переходе из режима торможения в режим движения
+            if self.last_movement_mode == 'braking':
+                self.roll_position_pid.reset()
+                self.pitch_position_pid.reset()
+                # Обновляем коэффициенты интегральной составляющей для движения
+                self.roll_position_pid.ki = ki_roll_moving
+                self.pitch_position_pid.ki = ki_pitch_moving
+            elif self.last_movement_mode != 'moving':
+                # Первый запуск - обновляем коэффициенты
+                self.roll_position_pid.ki = ki_roll_moving
+                self.pitch_position_pid.ki = ki_pitch_moving
+            self.last_movement_mode = 'moving'
+            
+            # Используем фиксированный временной интервал для PID (примерно соответствует частоте вызова)
+            dt = 0.1
+            
+            if use_pid_moving:
+                # Используем PID-регуляторы для движения к цели
+                # error_x управляет pitch (вперёд-назад), error_y управляет roll (влево-вправо)
+                pitch_output = self.pitch_position_pid.update(error_x, dt)
+                roll_output = self.roll_position_pid.update(error_y, dt)
+                
+                # Преобразуем выход PID в значения RC каналов
+                # Ограничиваем выход регуляторов
+                pitch_output = max(-500, min(500, pitch_output))
+                roll_output = max(-500, min(500, roll_output))
+                
+                # Вычисляем интенсивность для возвращаемого словаря
+                intensity_x = int(abs(pitch_output))
+                intensity_y = int(abs(roll_output))
+                
+                # Определяем направление и интенсивность
+                # Pitch управляет движением вперёд-назад (север-юг)
+                # ВАЖНО: pitch > 1500 = назад, pitch < 1500 = вперёд
+                if abs(error_x) > 0.1:  # Порог для движения по северу-югу
+                    if error_x > 0:  # Цель южнее - двигаемся на юг (назад)
+                        pitch = neutral + intensity_x  # < 1500 для движения назад
+                    else:  # Цель севернее - двигаемся на север (вперёд)
+                        pitch = neutral - intensity_x  # > 1500 для движения вперёд
+                else:
+                    pitch = neutral
+                
+                # Roll управляет движением влево-вправо (восток-запад)
+                if abs(error_y) > 0.1:  # Порог для движения по востоку-западу
+                    if error_y > 0:
+                        roll = neutral - intensity_y  # < 1500 для движения влево
+                    else: 
+                        roll = neutral + intensity_y  # > 1500 для движения вправо
+                else:
+                    roll = neutral
+                
+                # Отладочный вывод для преследователя
+                # if self.config.get('role') == 'follower':
+                #     print(f"[Follower] Moving PID: error_x={error_x:.3f}, error_y={error_y:.3f}, distance={distance:.3f}, "
+                #           f"pitch_output={pitch_output:.1f}, roll_output={roll_output:.1f}, pitch={pitch}, roll={roll}, "
+                #           f"pitch_integral={self.pitch_position_pid.integral:.3f}, roll_integral={self.roll_position_pid.integral:.3f}")
+            else:
+                # Старый метод с только П-регулятором (для обратной совместимости)
             # П-регулирование
             # error_x управляет pitch (вперёд-назад), error_y управляет roll (влево-вправо)
-            intensity_x = int(abs(error_x) * kp)
-            intensity_y = int(abs(error_y) * kp)
+                intensity_x = int(abs(error_x) * kp)
+                intensity_y = int(abs(error_y) * kp)
             
             # Ограничиваем интенсивность
-            intensity_x = min(max_intensity, intensity_x)
-            intensity_y = min(max_intensity, intensity_y)
+                intensity_x = min(500, intensity_x)
+                intensity_y = min(500, intensity_y)
             
             # Определяем направление
             # Roll управляет движением влево-вправо (восток-запад)
-            if abs(error_y) > 0.1:  # Порог для движения по востоку-западу
-                if error_y > 0:  # Цель восточнее - двигаемся на восток (вправо)
-                    roll = neutral - intensity_y
-                else:  # Цель западнее - двигаемся на запад (влево)
+            if abs(error_y) > 0.1:  # Порог
+                if error_y > 0:  # Цель западнее - двигаемся на запад (влево)
                     roll = neutral + intensity_y
+                else:  # Цель восточнее - двигаемся на восток (вправо)
+                    roll = neutral - intensity_y
             else:
                 roll = neutral
             
             # Pitch управляет движением вперёд-назад (север-юг)
-            if abs(error_x) > 0.1:  # Порог для движения по северу-югу
-                if error_x > 0:  # Цель севернее - двигаемся на север (вперёд)
-                    pitch = neutral - intensity_x
+            # ВАЖНО: pitch > 1500 = назад, pitch < 1500 = вперёд
+            if abs(error_x) > 0.1:  # Порог
+                if error_x > 0:  # Цель южнее - двигаемся на юг (назад)
+                        pitch = neutral - intensity_x
                 else:  # Цель южнее - двигаемся на юг (назад)
-                    pitch = neutral + intensity_x
+                        pitch = neutral + intensity_x
             else:
                 pitch = neutral
+                
+                # Отладочный вывод для преследователя
+                # if self.config.get('role') == 'follower':
+                #     print(f"[Follower] Moving P: error_x={error_x:.3f}, error_y={error_y:.3f}, distance={distance:.3f}, intensity_x={intensity_x}, pitch={pitch}, roll={roll}")
             
             # Отправляем команду
-            send_rc_override(self.master, roll, pitch, neutral, neutral)
+            send_rc_override(self.master, roll, pitch, neutral, neutral, controller=self)
             
             # Вывод информации о регуляторе roll только для преследователя
-            if self.config.get('role') == 'follower':
-                print(f"Roll regulator input (error_y): {error_y:.3f}, Roll output: {roll}")
+            # if self.config.get('role') == 'follower':
+            #     print(f"Roll regulator input (error_y): {error_y:.3f}, Roll output: {roll}")
             
             return {
                 'roll': roll,
@@ -260,31 +516,50 @@ class DroneController:
     
     def move_with_pid_braking(self, direction, kpx=2000, kpy=2000,
                               move_duration=5, target_velocity=0.0, 
-                              max_brake_time=10.0, velocity_threshold=0.01):
+                              max_brake_time=10.0, velocity_threshold=0.8,
+                              use_pid=True):
         """
-        Движение с П-регулированием для торможения (из RC_OVERRIDE_square.py).
+        Движение с PID-регулированием для торможения.
         
         Args:
             direction: кортеж (roll, pitch, throttle, yaw) - направление движения
-            kpx: пропорциональный коэффициент для оси X (восток-запад)
-            kpy: пропорциональный коэффициент для оси Y (север-юг)
+            kpx: пропорциональный коэффициент для оси X (восток-запад) - используется только если use_pid=False
+            kpy: пропорциональный коэффициент для оси Y (север-юг) - используется только если use_pid=False
             move_duration: длительность движения в секундах
             target_velocity: целевая скорость (обычно 0.0)
             max_brake_time: максимальное время торможения
             velocity_threshold: порог скорости для остановки
+            use_pid: использовать ли PID-регулятор (True) или только П-регулятор (False)
         """
         roll, pitch, throttle, yaw = direction
         
+        # Сброс интегральной составляющей при начале нового движения
+        if self.last_movement_mode != 'moving':
+            self.roll_velocity_pid.reset()
+            self.pitch_velocity_pid.reset()
+        self.last_movement_mode = 'moving'
+        
         # Движение
+        # print("[Leader] Движение")
         start = time.time()
         while time.time() - start < move_duration:
-            send_rc_override(self.master, roll, pitch, throttle, yaw)
+            send_rc_override(self.master, roll, pitch, throttle, yaw, controller=self)
             time.sleep(0.1)
         
-        # П-регулирование для торможения
+        # Переход в режим торможения
+        self.last_movement_mode = 'braking'
+        
+        # PID-регулирование для торможения
         start_time = time.time()
+        last_update_time = time.time() # Для I-составляющей PID-регулятора
         
         while time.time() - start_time < max_brake_time:
+            current_time = time.time()
+            dt = current_time - last_update_time
+            if dt <= 0:
+                dt = 0.05  # Минимальный интервал
+            last_update_time = current_time
+            
             # Получаем текущую скорость
             current_velocity = self.velocity_monitor.get_velocity()
             # В NED: vx = север, vy = восток
@@ -294,109 +569,149 @@ class DroneController:
             # Если скорость достаточно мала, прекращаем
             if abs(current_x_velocity) < velocity_threshold and abs(current_y_velocity) < velocity_threshold:
                 print(f"[Drone {self.config['id']}] Velocities threshold reached")
+                # Сбрасываем интегральную составляющую при достижении цели
+                self.roll_velocity_pid.reset()
+                self.pitch_velocity_pid.reset()
                 break
             
-            # П-регулирование: ошибка * коэффициент = интенсивность торможения
+            # Ошибки скорости
             error_vx = target_velocity - current_x_velocity  # Ошибка скорости на север
-            # print(f"error_vx{error_vx} = target_velocity{target_velocity} - current_x_velocity{current_x_velocity}")
             error_vy = target_velocity - current_y_velocity    # Ошибка скорости на восток
             
-            # Вычисляем интенсивность торможения для каждого канала
-            brake_intensity_x = 0
-            brake_intensity_y = 0
-            
+            if use_pid:
+                # Используем PID-регуляторы
             # Торможение по северу-югу управляет pitch (вперёд-назад)
-            if kpx > 0:
-                brake_intensity_x = int(abs(error_vx) * kpx)
+                brake_output_pitch = self.pitch_velocity_pid.update(error_vx, dt)
+                brake_intensity_x = int(abs(brake_output_pitch))
                 brake_intensity_x = min(500, max(50, brake_intensity_x))
                 # Направление торможения: если error_vx > 0 (движение на север), тормозим на юг
-                brake_direction_x = 1 if error_vx > 0 else -1
+                brake_direction_x = -1 if error_vx > 0 else 1
                 brake_pitch = neutral + (brake_direction_x * brake_intensity_x)
-            else:
-                brake_pitch = neutral  # Не применяем торможение по pitch
             
             # Торможение по востоку-западу управляет roll (влево-вправо)
-            if kpy > 0:
-                brake_intensity_y = int(abs(error_vy) * kpy)
+                # Это критично для лидера - компенсирует накопление ошибки по roll
+                brake_output_roll = self.roll_velocity_pid.update(error_vy, dt)
+                brake_intensity_y = int(abs(brake_output_roll))
                 brake_intensity_y = min(500, max(50, brake_intensity_y))
                 # Направление торможения: если error_vy > 0 (движение на восток), тормозим на запад
-                brake_direction_y = -1 if error_vy > 0 else 1
+                brake_direction_y = 1 if error_vy > 0 else -1
                 brake_roll = neutral + (brake_direction_y * brake_intensity_y)
+                
+                # Вывод информации о регуляторе для отладки (только для лидера)
+                # if self.config.get('role') == 'leader':
+                #     print(f"[Leader] Pitch PID: error_vx={error_vx:.3f}, pitch={brake_pitch}, error_vy={error_vy:.3f}, roll={brake_roll}")
             else:
-                brake_roll = neutral  # Не применяем торможение по roll
+                # Старый метод с только П-регулятором (для обратной совместимости)
+                # Торможение по северу-югу управляет pitch (вперёд-назад)
+                if kpx > 0:
+                    brake_intensity_x = int(abs(error_vx) * kpx)
+                    brake_intensity_x = min(500, max(50, brake_intensity_x))
+                    brake_direction_x = 1 if error_vx > 0 else -1
+                    brake_pitch = neutral + (brake_direction_x * brake_intensity_x)
+                else:
+                    brake_pitch = neutral
+                
+                # Торможение по востоку-западу управляет roll (влево-вправо)
+                if kpy > 0:
+                    brake_intensity_y = int(abs(error_vy) * kpy)
+                    brake_intensity_y = min(500, max(50, brake_intensity_y))
+                    brake_direction_y = -1 if error_vy > 0 else 1
+                    brake_roll = neutral + (brake_direction_y * brake_intensity_y)
+                else:
+                    brake_roll = neutral
             
             # Применяем торможение
-            send_rc_override(self.master, brake_roll, brake_pitch, neutral, neutral)
+            send_rc_override(self.master, brake_roll, brake_pitch, neutral, neutral, controller=self)
             
-            # Вывод информации о регуляторе скорости для лидера (движение вперёд-назад)
-            # if self.config.get('role') == 'leader':
-                # print(f"Speed regulator input (error_vx): {error_vx:.3f}, Pitch output: {brake_pitch}")
-            
-            time.sleep(0.05)
+            time.sleep(0.05) # ЗАДАЁТ dt ДЛЯ ИНТЕГРАЛЬНОЙ СОСТАВЛЯЮЩЕЙ!!!
     
     def stop(self):
         """Остановка дрона."""
-        send_rc_override(self.master, neutral, neutral, neutral, neutral)
+        send_rc_override(self.master, neutral, neutral, neutral, neutral, controller=self)
         self.coords_monitor.stop()
         self.velocity_monitor.stop()
+        print("Setting mode LAND")
+        self.master.set_mode(9)
 
-def leader_pattern(controller, duration=5, kpx=100, kpy=100):
+def leader_pattern(controller, duration=5, kpx=100, kpy=100, 
+                   use_pid=True):
     """
-    Паттерн движения для лидирующего дрона (вперёд-назад) с П-регулятором торможения.
+    Паттерн движения для лидирующего дрона (вперёд-назад) с PID-регулятором торможения.
     
     Args:
         controller: объект DroneController
         duration: длительность движения в одном направлении
-        kpx: пропорциональный коэффициент для торможения по X (восток-запад)
-        kpy: пропорциональный коэффициент для торможения по Y (север-юг)
+        kpx: пропорциональный коэффициент для торможения по X (восток-запад) - используется только если use_pid=False
+        kpy: пропорциональный коэффициент для торможения по Y (север-юг) - используется только если use_pid=False
+        use_pid: использовать ли PID-регулятор (True) или только П-регулятор (False)
     """
-    print(f"Leader drone {controller.config['id']} starting forward-backward pattern with P-control braking")
+    if use_pid:
+        print(f"Leader drone {controller.config['id']} starting forward-backward pattern with PID-control braking")
+    else:
+        print(f"Leader drone {controller.config['id']} starting forward-backward pattern with P-control braking")
     
     while True:
         # Вперёд с торможением
+        print("[Leader] Полёт вперёд")
         controller.move_with_pid_braking(
             (neutral, 1700, neutral, neutral),
             kpx=kpx, kpy=kpy,
             move_duration=duration,
             target_velocity=0.0,
-            max_brake_time=5.0,
-            velocity_threshold=0.8
+            max_brake_time=20.0,
+            velocity_threshold=0.05,
+            use_pid=use_pid
         )
         
         # Пауза после торможения
-        send_rc_override(controller.master, neutral, neutral, neutral, neutral)
+        send_rc_override(controller.master, neutral, neutral, neutral, neutral, controller=controller)
         time.sleep(1)
         
         # Назад с торможением
+        print("[Leader] Полёт назад")
         controller.move_with_pid_braking(
             (neutral, 1300, neutral, neutral),
             kpx=kpx, kpy=kpy,
             move_duration=duration,
             target_velocity=0.0,
-            max_brake_time=5.0,
-            velocity_threshold=0.8
+            max_brake_time=20.0,
+            velocity_threshold=0.05,
+            use_pid=use_pid
         )
         
         # Пауза после торможения
-        send_rc_override(controller.master, neutral, neutral, neutral, neutral)
+        send_rc_override(controller.master, neutral, neutral, neutral, neutral, controller=controller)
         time.sleep(1)
 
-def follower_loop(controller, target_drone_id, kp=500.0, max_intensity=200,
-                 kpx_brake=2000, kpy_brake=2000, distance_threshold=0.5):
+def follower_loop(controller, target_drone_id, kp=500.0,
+                 kpx_brake=2000, kpy_brake=2000, distance_threshold=0.5,
+                 use_pid_braking=True, ki_roll_brake=50.0, ki_pitch_brake=50.0,
+                 use_pid_moving=True, ki_roll_moving=10.0, ki_pitch_moving=10.0):
     """
     Основной цикл преследования для следующего дрона с автоматическим торможением.
     
     Args:
         controller: объект DroneController
         target_drone_id: ID дрона, которого нужно преследовать
-        kp: пропорциональный коэффициент для движения к цели
-        max_intensity: максимальная интенсивность управления при движении
-        kpx_brake: пропорциональный коэффициент для торможения по X (восток-запад)
-        kpy_brake: пропорциональный коэффициент для торможения по Y (север-юг)
+        kp: пропорциональный коэффициент для движения к цели (используется только если use_pid_moving=False)
+        kpx_brake: пропорциональный коэффициент для торможения по X (восток-запад) - используется только если use_pid_braking=False
+        kpy_brake: пропорциональный коэффициент для торможения по Y (север-юг) - используется только если use_pid_braking=False
         distance_threshold: порог расстояния для начала торможения (м)
-        velocity_threshold: порог скорости для остановки торможения (м/с)
+        use_pid_braking: использовать ли PID-регулятор для торможения (True) или только П-регулятор (False)
+        ki_roll_brake: интегральный коэффициент для roll регулятора при торможении
+        ki_pitch_brake: интегральный коэффициент для pitch регулятора при торможении
+        use_pid_moving: использовать ли PID-регулятор для движения к цели (True) или только П-регулятор (False)
+        ki_roll_moving: интегральный коэффициент для roll регулятора при движении к цели
+        ki_pitch_moving: интегральный коэффициент для pitch регулятора при движении к цели
     """
-    print(f"Follower drone {controller.config['id']} starting pursuit of drone {target_drone_id}")
+    if use_pid_braking and use_pid_moving:
+        print(f"Follower drone {controller.config['id']} starting pursuit of drone {target_drone_id} with PID-control (moving and braking)")
+    elif use_pid_braking:
+        print(f"Follower drone {controller.config['id']} starting pursuit of drone {target_drone_id} with PID-control braking")
+    elif use_pid_moving:
+        print(f"Follower drone {controller.config['id']} starting pursuit of drone {target_drone_id} with PID-control moving")
+    else:
+        print(f"Follower drone {controller.config['id']} starting pursuit of drone {target_drone_id}")
     
     iteration = 0
     while True:
@@ -408,18 +723,24 @@ def follower_loop(controller, target_drone_id, kp=500.0, max_intensity=200,
             continue
         
         target_position = controller.other_drones_positions[target_drone_id]
+        # print(f"target_position = {target_position}")
         
         # Движение к цели с автоматическим торможением
         result = controller.move_towards(
             target_position, 
             kp=kp, 
-            max_intensity=max_intensity,
             distance_threshold=distance_threshold,
             kpx_brake=kpx_brake,
-            kpy_brake=kpy_brake
+            kpy_brake=kpy_brake,
+            use_pid_braking=use_pid_braking,
+            ki_roll_brake=ki_roll_brake,
+            ki_pitch_brake=ki_pitch_brake,
+            use_pid_moving=use_pid_moving,
+            ki_roll_moving=ki_roll_moving,
+            ki_pitch_moving=ki_pitch_moving
         )
         
-        time.sleep(0.1)  # Обновление каждые 100мс
+        #time.sleep(0.1)  # Обновление каждые 100мс
 
 def coordinate_exchange_loop(controllers):
     """
@@ -435,6 +756,7 @@ def coordinate_exchange_loop(controllers):
         positions = {}
         for controller in controllers:
             positions[controller.config['id']] = controller.get_my_position()
+            # print(f"Drone {controller.config['id']} coordinates: {positions[controller.config['id']]}")
         
         # Распространяем позиции всем дронам
         for controller in controllers:
@@ -442,7 +764,7 @@ def coordinate_exchange_loop(controllers):
                 if drone_id != controller.config['id']:
                     controller.update_other_drone_position(drone_id, position)
         
-        time.sleep(0.1)  # Обновление каждые 100мс
+        #time.sleep(0.1)  # Обновление каждые 100мс
 
 def initialize_drone_parallel(controller, init_barrier):
     """
@@ -479,7 +801,7 @@ def main():
     # Создаём контроллеры для всех дронов (только объекты, без подключения)
     controllers = []
     for config in DRONES_CONFIG:
-        controller = DroneController(config)
+        controller = DroneController(config,logging=True) #Включаем логирование координат
         controllers.append(controller)
     
     # Создаём барьер для синхронизации инициализации всех дронов
@@ -527,6 +849,7 @@ def main():
     time.sleep(1)  # Даём время на первый обмен координатами
     
     try:
+        ''' Ваш код роевого алгоритма '''
         # Находим лидера и последователя
         leader = None
         follower = None
@@ -542,21 +865,28 @@ def main():
             return
         print("Leader and follower found!")
         
-        # Запускаем паттерн лидера в отдельном потоке
+        # Запускаем паттерн лидера в отдельном потоке с PID-регулятором
+        # ki_roll=50.0 - интегральный коэффициент для компенсации дрейфа по roll
         leader_thread = threading.Thread(
             target=leader_pattern,
-            args=(leader, 5),
+            args=(leader, 5, 100, 100, True),  # duration, kpx, kpy, use_pid
             daemon=True
         )
         leader_thread.start()
-        print("Leader thread started")
+        print("Leader thread started with PID control")
         
-        # Запускаем цикл преследования в основном потоке
+        # Запускаем цикл преследования в основном потоке с PID-регулятором для движения и торможения
         print("Starting follower loop...")
         follower_loop(follower, leader.config['id'], 
-                     kp=100.0, max_intensity=200,
+                     kp=100.0,
                      kpx_brake=100, kpy_brake=100,
-                     distance_threshold=0.5)
+                     distance_threshold=0.5,
+                     use_pid_braking=True,
+                     ki_roll_brake=50.0,
+                     ki_pitch_brake=50.0,
+                     use_pid_moving=True,
+                     ki_roll_moving=10.0,
+                     ki_pitch_moving=10.0)
         
     except KeyboardInterrupt:
         print("\nStopping all drones...")

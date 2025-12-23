@@ -41,14 +41,14 @@ class VelocityMonitor:
                 if msg:
                     with self.lock:
                         # В GLOBAL_POSITION_INT: vx, vy - скорости в см/с
-                        self.velocity_ned['vx'] = -msg.vx / 100.0 #Почему-то скорость при движении вперёд была отрицательной
-                        self.velocity_ned['vy'] = -msg.vy / 100.0 #Такая же фигня
+                        self.velocity_ned['vx'] = msg.vx / 100.0 # Скорость при движении вперёд была отрицательной, потому что при наклоне pitch вперёд - дрон в Webots летит НАЗАД!!!!!!
+                        self.velocity_ned['vy'] = msg.vy / 100.0
                         self.velocity_ned['vz'] = msg.vz / 100.0 if hasattr(msg, 'vz') else 0.0
 
             except Exception as e:
                 # Тихий режим - не выводим ошибки постоянно
                 pass
-            time.sleep(0.05)  # Обновление каждые 50мс
+            # time.sleep(0.05)  # Обновление каждые 50мс
     
     def get_velocity(self):
         """Получить текущую скорость."""

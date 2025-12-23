@@ -44,7 +44,8 @@ packages = [
     "pyserial",
     "future",
     "lxml",
-    "wxPython"
+    "wxPython", # для модуля console
+    "opencv-python" # для модуля map
 ]
 run_in_venv(f"{pip_executable} install {' '.join(packages)}")
 

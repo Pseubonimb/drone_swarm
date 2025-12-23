@@ -240,7 +240,7 @@ class MAVFTP:  # pylint: disable=too-many-instance-attributes
                       ('burst_read_size', int, 80),
                       ('write_size', int, 80),
                       ('write_qsize', int, 5),
-                      ('idle_detection_time', float, 1.2),
+                      ('idle_detection_time', float, 3.7),
                       ('read_retry_time', float, 1.0),
                       ('retry_time', float, 0.5)])):
         self.ftp_settings = settings
@@ -1238,7 +1238,7 @@ class MAVFTP:  # pylint: disable=too-many-instance-attributes
 
         count = 0
         pad_byte = 0
-        last_name = bytes()
+        last_name = b''
         while True:
             while len(data) > 0 and data[0] == pad_byte:
                 data = data[1:]  # skip pad bytes

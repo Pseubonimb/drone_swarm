@@ -86,7 +86,7 @@ class VelocityMonitor:
                         self.velocity_ned['vx'] = msg.vx / 100.0
                         self.velocity_ned['vy'] = msg.vy / 100.0
                         self.velocity_ned['vz'] = msg.vz / 100.0 if hasattr(msg, 'vz') else 0.0
-                        print(self.velocity_ned['vx'], self.velocity_ned['vy'], self.velocity_ned['vz'])
+                        #print(self.velocity_ned['vx'], self.velocity_ned['vy'], self.velocity_ned['vz'])
 
             except Exception as e:
                 # Тихий режим - не выводим ошибки постоянно
@@ -97,7 +97,8 @@ class VelocityMonitor:
         """Получить текущую скорость."""
         with self.lock:
             return self.velocity_ned.copy()
-
+    
+    '''
     def get_horizontal_speed(self, direction):
         """
         Получить скорость в заданном направлении.
@@ -113,31 +114,23 @@ class VelocityMonitor:
             vx, vy, vz = self.velocity_ned['vx'], self.velocity_ned['vy'], self.velocity_ned['vz']
         
         # Вычисляем скорость в направлении движения
-        # В NED системе: vx - север (positive north), vy - восток (positive east)
-        # Для движения вперёд (pitch > neutral) нужна скорость на север (vx)
-        # Для движения назад (pitch < neutral) нужна скорость на юг (-vx)
-        # Для движения вправо (roll > neutral) нужна скорость на восток (vy)
-        # Для движения влево (roll < neutral) нужна скорость на запад (-vy)
         
-        if pitch > neutral:  # Вперёд (на север)
-            # Положительная скорость = движение вперёд
+        if pitch > neutral:  # Назад (на юг)
             return vx
-        elif pitch < neutral:  # Назад (на юг)
-            # Положительная скорость = движение назад (но мы хотим отрицательную для торможения)
+        elif pitch < neutral:  # Вперёд (на север)
             return -vx
         elif roll > neutral:  # Вправо (на восток)
-            # Положительная скорость = движение вправо
             return vy
         elif roll < neutral:  # Влево (на запад)
-            # Положительная скорость = движение влево
             return -vy
         else:
             return 0.0
-
+    '''
+    
 square_steps = [
-    (neutral, 1700, neutral, neutral),  # Вперёд
+    (neutral, 1700, neutral, neutral),  # Назад
     (1700, neutral, neutral, neutral),  # Вправо
-    (neutral, 1300, neutral, neutral),  # Назад
+    (neutral, 1300, neutral, neutral),  # Вперёд
     (1300, neutral, neutral, neutral)  # Влево
 ]
 
@@ -164,7 +157,7 @@ def move_with_pid_braking(drone, direction, velocity_monitor, kpx=2000, kpy=2000
     roll, pitch, throttle, yaw = direction
     
     # Движение
-    direction_name = "Forward" if pitch > neutral else "Backward" if pitch < neutral else \
+    direction_name = "Backward" if pitch > neutral else "Forward" if pitch < neutral else \
                      "Right" if roll > neutral else "Left" if roll < neutral else "Unknown"
     print(f"Moving {direction_name}: roll={roll}, pitch={pitch}")
     
@@ -253,10 +246,10 @@ def brake_movement(drone, direction, brake_duration=0.5, brake_intensity=200):
     brake_throttle = neutral
     brake_yaw = neutral
     
-    # Если двигались вперёд (pitch > neutral), тормозим назад
+    # Если двигались назад (pitch > neutral), тормозим вперёд
     if pitch > neutral:
         brake_pitch = neutral - brake_intensity
-    # Если двигались назад (pitch < neutral), тормозим вперёд
+    # Если двигались вперёд (pitch < neutral), тормозим назад
     elif pitch < neutral:
         brake_pitch = neutral + brake_intensity
     
@@ -287,7 +280,7 @@ def move_with_braking(drone, direction, move_duration=5, brake_duration=0.5, bra
     """
     
     roll, pitch, throttle, yaw = direction
-    direction_name = "Forward" if pitch > neutral else "Backward" if pitch < neutral else \
+    direction_name = "Backward" if pitch > neutral else "Forward" if pitch < neutral else \
                      "Right" if roll > neutral else "Left" if roll < neutral else "Unknown"
     print(f"Moving {direction_name}: roll={roll}, pitch={pitch}")
     
@@ -480,7 +473,7 @@ try:
                              velocity_monitor, kpx=100, kpy=100,
                               move_duration=step_duration, target_velocity=0.0, 
                               max_brake_time=5.0, neutral_time=2.0, 
-                              velocity_threshold=0.8) # для ALT_HOLD
+                              velocity_threshold=0.2) # для ALT_HOLD
 
             # move_with_braking(master, step, 
             #                  move_duration=step_duration, 

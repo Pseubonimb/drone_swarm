@@ -1,5 +1,7 @@
 import threading
 import time
+from pymavlink import mavutil
+import sys
 
 # === Класс для получения координат дрона ===
 class CoordsMonitor:
@@ -34,21 +36,32 @@ class CoordsMonitor:
         while self.running:
             try:
                 # Читаем сообщения о координатах LOCAL_POSITION_NED (в м)
-                msg = self.drone.recv_match(type='LOCAL_POSITION_NED', blocking=False, timeout=0.1)
-                if msg:
+                msg = self.drone.recv_match(type='LOCAL_POSITION_NED', blocking=True)
+                #print("Waiting msg")
+
+                # Проверка взята с сайта https://mavlink.io/en/mavgen_python/#receiving-messages
+                if not msg:
+                    print("NOPE..............")
+                    return
+                if msg.get_type() == "BAD_DATA":
+                    if mavutil.all_printable(msg.data):
+                        print(f"BRUH {msg.data}")
+                        # sys.stdout.write(msg.data)
+                        # sys.stdout.flush()
+                else:
                     with self.lock:
                         # В LOCAL_POSITION_NED: x, y, z - координаты в метрах (NED система координат)
                         # x - север (positive north)
                         # y - восток (positive east)
                         # z - вниз (positive down)
-                        self.position_ned['x'] = msg.x
-                        self.position_ned['y'] = -msg.y
+                        self.position_ned['x'] = msg.x #Ось x в Webots направлена в направлении кормы дрона
+                        self.position_ned['y'] = msg.y
                         self.position_ned['z'] = msg.z
 
             except Exception as e:
                 # Тихий режим - не выводим ошибки постоянно
                 pass
-            time.sleep(0.05)  # Обновление каждые 50мс
+            # time.sleep(0.05)  # Обновление каждые 50мс !!! Это вносит критические задержки реакции!!!
     
     def get_position(self):
         """Получить текущие координаты."""
