@@ -1,4 +1,4 @@
-#!/home/user/Documents/Kursach/drone_swarm_simulation/drone_env/bin/python3
+#!/home/user/Документы/Kursach/drone_swarm_simulation/drone_env/bin/python3
 
 '''
 convert a MAVLink tlog file to a MATLab mfile

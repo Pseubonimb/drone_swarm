@@ -1,0 +1,26 @@
+---
+description: Data pipeline and latency (leader position to follower, update rate, exchange loop)
+globs: "**/leader_forward_one_move.py","**/drone_following*.py","**/CoordsMonitor.py"
+alwaysApply: false
+---
+
+# Data Pipeline and Latency
+
+## Problem (from analysis)
+
+- **Chain**: Leader position reaches follower via: SITL → LOCAL_POSITION_NED → leader’s CoordsMonitor thread → `coordinate_exchange_loop()` → `follower.other_drones_positions[leader_id]` → `follower_loop()`.
+- **Bottleneck**: Freshness of leader position at follower is limited by **SITL/Webots** (LOCAL_POSITION_NED rate and, with Webots, simulation step), not by how fast the exchange or follower loop runs.
+- **Effect**: Control uses position that can be 20–100 ms old → lag and overshoot when leader is moving.
+
+## Where in code
+
+- `coordinate_exchange_loop(controllers)`: reads `get_my_position()` for all, writes `update_other_drone_position()` for each; often **no sleep** → runs as fast as CPU allows, but leader position is still only as fresh as CoordsMonitor (SITL).
+- `CoordsMonitor._monitor_loop()`: `recv_match(type='LOCAL_POSITION_NED', blocking=True)` — update rate = SITL send rate.
+- Follower uses `controller.other_drones_positions[target_drone_id]` in `follower_loop`.
+
+## Recommendations
+
+1. **Align control rate with data rate**: Run `follower_loop` at a fixed rate (e.g. 50 Hz) so it does not act on the same stale snapshot thousands of times; see control-loop rule.
+2. **Optional**: Add a rate or small sleep in `coordinate_exchange_loop` to avoid burning CPU; effective leader position freshness is still SITL-limited.
+3. **Logging**: Log timestamp of last leader position update (or message time) vs time when follower sends RC, to measure latency in the loop.
+4. **Do not** expect CoordsMonitor to be the bottleneck: each drone has its own connection and thread; the bottleneck is the **source** (SITL/Webots), not the reader.

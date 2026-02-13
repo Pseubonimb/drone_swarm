@@ -1,0 +1,31 @@
+---
+description: Control loop for follower (PID, rate limit, overshoot, RC_OVERRIDE)
+globs: "**/leader_forward_one_move.py","**/drone_following*.py","**/RC_Following/*.py"
+alwaysApply: false
+---
+
+# Control Loop — Follower / Leader
+
+## Problem (from analysis)
+
+- **Overshoot**: Follower flies past leader because regulator has **kd=0** — no damping when approaching target; control is based only on position error (P/I).
+- **Rate mismatch**: `follower_loop()` runs with **no sleep**; RC_OVERRIDE is sent at very high rate while position updates at SITL/Webots rate (e.g. 10–50 Hz) → control acts on stale position.
+
+## Where in code
+
+- `follower_loop(controller, target_drone_id, kp=..., ki=..., kd=...)` — main loop; currently often called with **kd=0**.
+- `move_towards_with_pid(target_position, roll_pid, pitch_pid)` — uses P/I/D to compute roll/pitch from position error.
+- `PIDRegulator` — integral_limit, output_limit; no explicit velocity or derivative of position in loop.
+
+## Recommendations
+
+1. **Enable Kd**: Use kd > 0 (e.g. 5–20) for pitch/roll PID to damp approach and reduce overshoot.
+2. **Rate limit**: Add fixed-period sleep in `follower_loop` (e.g. `time.sleep(0.02)` → 50 Hz) so control rate does not exceed position update rate.
+3. **Optional**: Scale down or dead-zone control when error is small to avoid “full gas” near target.
+4. **Optional**: Use VelocityMonitor for feedforward (leader velocity) or for a separate velocity/braking term.
+
+## NED → RC mapping (this project)
+
+- error_x (NED x) → pitch: positive error_x → move north; pitch < 1500 = forward.
+- error_y (NED y) → roll: positive error_y → move east; roll > 1500 = left.
+- neutral = 1500; output_limit and integral_limit already applied in PIDRegulator.

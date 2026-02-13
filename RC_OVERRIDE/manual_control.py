@@ -37,10 +37,10 @@ time.sleep(5)
 duration_sec = 2
 end_time = time.time() + duration_sec
 
-print("Setting mode STABILIZE")
-mode_id = master.mode_mapping().get("STABILIZE")
-print(mode_id)
-master.set_mode(mode_id)
+# print("Setting mode STABILIZE")
+# mode_id = master.mode_mapping().get("STABILIZE")
+# print(mode_id)
+master.set_mode(2)
 
 while time.time() < end_time:
     # Параметры команды MANUAL_CONTROL:

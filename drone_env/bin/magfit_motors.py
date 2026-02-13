@@ -1,4 +1,4 @@
-#!/home/user/Documents/Kursach/drone_swarm_simulation/drone_env/bin/python3
+#!/home/user/Документы/Kursach/drone_swarm_simulation/drone_env/bin/python3
 
 '''
 fit best estimate of magnetometer offsets, trying to take into account motor interference

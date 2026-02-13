@@ -18,3 +18,7 @@ dumpstack.sh_arducopter.23709.out
 mav_0_1.parm
 controllers/ardupilot_vehicle_controller/__pycache__/webots_vehicle.cpython-312.pyc
 RC_OVERRIDE/Square with POS_HOLD default PID/
+
+docs/*.md
+AGENTS.md
+new_iteration_RC_OVERRIDE/experiment_stability/README_EXPERIMENTS.md

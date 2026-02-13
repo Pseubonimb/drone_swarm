@@ -1,0 +1,142 @@
+% Конспект изменений: регуляторы лидер/преследователь, визуализатор без V-Bots
+% Кодировка: UTF-8 (pdflatex + inputenc или xelatex/lualatex)
+
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T2A]{fontenc}
+\usepackage[russian]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{Конспект изменений в проекте симуляции ансамбля БПЛА}
+\author{Лидер--преследователь, регуляторы, визуализатор}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Обзор}
+
+В проекте реализован сценарий «лидер -- преследователь»: лидер движется вперёд и назад по заданной программе, преследователь удерживает заданное смещение относительно лидера с помощью PID-регуляторов по каналам roll и pitch. Ниже перечислены все внесённые изменения: доработка регуляторов (пропорциональная и дифференциальная составляющие), настройка контура управления, добавление визуализатора, работающего без 3D-симуляции V-Bots (Webots).
+
+\section{Регуляторы}
+
+\subsection{Лидер}
+
+Лидер \emph{не} использует регулятор по позиции. Управление задаётся программно:
+\begin{itemize}[noitemsep]
+  \item Режим полёта: \texttt{POS\_HOLD} (удержание позиции с интерпретацией стиков как углов крена/тангажа).
+  \item Движение вперёд: постоянная команда по каналу pitch (\texttt{pitch = 1400}, наклон вперёд от нейтрали 1500) в течение заданного времени (\texttt{leader-duration}, по умолчанию 10 с).
+  \item Остановка: переход в режим \texttt{BRAKE}, пауза, возврат в \texttt{POS\_HOLD} с нейтральными стиками.
+\end{itemize}
+Таким образом, у лидера нет пропорциональной или дифференциальной составляющей по ошибке позиции --- только программное задание «вперёд / стоп».
+
+\subsection{Преследователь: PID по roll и pitch}
+
+Преследователь использует два независимых PID-регулятора: по ошибке по оси X (North) выдаётся управление по pitch, по ошибке по оси Y (East) --- по roll. Целевая позиция --- позиция лидера с заданным смещением (например, 2 м по Y).
+
+\subsubsection{Структура регулятора}
+
+Класс \texttt{PIDRegulator} реализует закон:
+\begin{equation}
+  u = K_p\, e + K_i \int e\, dt + K_d\, \frac{de}{dt},
+\end{equation}
+с ограничениями: интеграл ограничен (\texttt{integral\_limit}), выход ограничен (\texttt{output\_limit}). По умолчанию для преследователя: \texttt{integral\_limit = 100}, \texttt{output\_limit = 200} (по каналу pitch/roll в единицах RC 1300--1700).
+
+\subsubsection{Пропорциональная составляющая (P)}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Назначение:} реакция на текущую ошибку позиции; при \texttt{error\_x > 0} (лидер впереди) преследователь должен давать наклон вперёд (pitch $<$ 1500).
+  \item \textbf{Изменение:} коэффициент $K_p$ увеличен с 1 до \textbf{8} по умолчанию. При $K_p = 1$ при большой ошибке (например 50 м) выход P составлял 50, что давало слабый наклон и отставание преследователя по X. При $K_p = 8$ преследователь быстрее выходит на «полный газ вперёд» и догоняет лидера.
+  \item \textbf{Параметр CLI:} \texttt{--kp} (по умолчанию 8.0).
+\end{itemize}
+
+\subsubsection{Интегральная составляющая (I)}
+
+\begin{itemize}[noitemsep]
+  \item По умолчанию \texttt{--ki 0}; при необходимости можно включить для устранения статической ошибки.
+  \item Используется anti-windup: интеграл ограничен \texttt{integral\_limit}.
+\end{itemize}
+
+\subsubsection{Дифференциальная составляющая (D)}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Назначение:} демпфирование при сближении с целью; уменьшение перелётов (overshoot) и осцилляций.
+  \item \textbf{Изменение:} введена дифференциальная составляющая с коэффициентом по умолчанию \textbf{$K_d = 10$} (\texttt{--kd 10}).
+  \item \textbf{Сглаживание D:} чтобы производная по ошибке не давала всплесков из-за шума, введён экспоненциальный фильтр: \texttt{derivative\_alpha = 0.7} (настраиваемый при создании регулятора). Фильтр: $d_{filt} \leftarrow \alpha\, d_{filt} + (1-\alpha)\, \frac{de}{dt}$.
+  \item \textbf{Параметр CLI:} \texttt{--kd} (по умолчанию 10.0).
+\end{itemize}
+
+\subsubsection{Фиксированный шаг времени (dt) и частота контура}
+
+\begin{itemize}[noitemsep]
+  \item При включённом ограничении частоты (\texttt{--control-hz 50}) в \texttt{update()} PID передаётся \textbf{фиксированный} $dt = 0.02$ с, чтобы интеграл и производная считались стабильно, без джиттера.
+  \item Частота цикла преследования по умолчанию --- \textbf{50 Гц} (\texttt{--control-hz 50}); при \texttt{--control-hz 0} ограничение снимается.
+\end{itemize}
+
+\subsection{Сводка параметров по умолчанию (преследователь)}
+
+\begin{center}
+\begin{tabular}{|l|c|l|}
+  \hline
+  Параметр & Значение & Описание \\
+  \hline
+  \texttt{--kp} & 8.0 & P-коэффициент \\
+  \texttt{--ki} & 0.0 & I-коэффициент \\
+  \texttt{--kd} & 10.0 & D-коэффициент (демпфирование) \\
+  \texttt{--control-hz} & 50.0 & Частота контура (Гц); 0 = без ограничения \\
+  \hline
+\end{tabular}
+\end{center}
+
+\section{Данные и контур обратной связи}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Запрос частой выдачи позиции:} при инициализации каждого дрона отправляется \texttt{SET\_MESSAGE\_INTERVAL} для \texttt{LOCAL\_POSITION\_NED} с интервалом 20\,000 мкс (50 Гц), чтобы автопилот отдавал позицию с предсказуемой частотой, а не 1--4 Гц по умолчанию.
+  \item \textbf{Расширенное логирование:} в CSV пишутся $t$, \texttt{leader\_x}, \texttt{leader\_y}, \texttt{follower\_x}, \texttt{follower\_y}, \texttt{error\_x}, \texttt{error\_y}, \texttt{follower\_vx}, \texttt{follower\_vy}, \texttt{loop\_dt} для последующего анализа и построения графиков.
+\end{itemize}
+
+\section{Визуализатор без V-Bots}
+
+Добавлена возможность наблюдать траектории лидера и преследователя в плоскости X--Y \emph{без} запуска 3D-симуляции Webots (V-Bots).
+
+\subsection{Визуализация в реальном времени по логу}
+
+Скрипт \texttt{plot\_realtime.py} читает лог-файл (\texttt{logs/two\_drones\_log.csv}), который в реальном времени пишет сценарий \texttt{leader\_forward\_one\_move.py}, и обновляет график позиций в плоскости X--Y.
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Режим «в файл» (без окна):} \texttt{--output FILE} --- кадр сохраняется в изображение (например \texttt{logs/realtime\_xy.png}) с заданным интервалом (по умолчанию 0.15 с). Не требует Qt/tkinter; подходит для окружений, где GUI недоступен (например Wayland без плагина xcb). Для автообновления картинки в просмотрщике: \texttt{feh -R 0.2 logs/realtime\_xy.png}.
+  \item \textbf{Режим с окном:} при запуске без \texttt{--output} скрипт пытается использовать GUI-бэкенд (Qt5Agg, TkAgg и др.); при отсутствии или ошибке рекомендуется перейти на режим \texttt{--output}.
+\end{itemize}
+
+Пример:
+\begin{verbatim}
+# Терминал 1: сценарий
+python leader_forward_one_move.py
+
+# Терминал 2: визуализатор в файл (без V-Bots)
+python plot_realtime.py logs/two_drones_log.csv --output logs/realtime_xy.png
+feh -R 0.2 logs/realtime_xy.png
+\end{verbatim}
+
+\subsection{Построение графиков по готовому логу}
+
+Скрипт \texttt{plot\_log\_coords.py} строит по CSV четыре графика: X и Y от времени (лидер и преследователь), ошибки по осям от времени, траектория в плоскости XY. При указании \texttt{-o plot.png} рисунок сохраняется в файл без открытия окна (бэкенд Agg), что также позволяет обходиться без GUI и без V-Bots.
+
+\subsection{Единый лаунчер}
+
+Лаунчер (\texttt{launch\_simulation.py} или \texttt{launch.py}) позволяет из одного места выбрать: симуляцию с Webots или только SITL, сценарий (лидер вперёд, квадрат и др.) и включение визуализатора. При выборе «только SITL» + визуализатор траектории отображаются по логу, без запуска V-Bots.
+
+\section{Краткая сводка изменений}
+
+\begin{enumerate}
+  \item \textbf{Лидер:} программное задание (постоянный pitch вперёд, BRAKE, возврат); регуляторов по позиции нет.
+  \item \textbf{Преследователь:} введены и настроены пропорциональная (P) и дифференциальная (D) составляющие PID; $K_p$ увеличен до 8, $K_d = 10$ по умолчанию; сглаживание D-члена (derivative\_alpha); фиксированный $dt$ при частоте контура 50 Гц.
+  \item \textbf{Данные:} запрос выдачи \texttt{LOCAL\_POSITION\_NED} с частотой 50 Гц; расширенное логирование в CSV.
+  \item \textbf{Визуализатор без V-Bots:} \texttt{plot\_realtime.py} с режимом \texttt{--output} для сохранения кадра в файл; \texttt{plot\_log\_coords.py -o} для графиков по логу без окна; лаунчер с опцией «только SITL» + визуализатор.
+\end{enumerate}
+
+\end{document}

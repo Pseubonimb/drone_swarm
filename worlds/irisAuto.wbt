@@ -10,7 +10,7 @@ EXTERNPROTO "../protos/Iris.proto"
 
 WorldInfo {
   title "Iris Ardupilot"
-  basicTimeStep 2
+  basicTimeStep 1
   FPS 20
 }
 Viewpoint {

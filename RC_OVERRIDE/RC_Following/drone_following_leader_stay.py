@@ -1,8 +1,19 @@
 from pymavlink import mavutil
 import time
 import threading
+import os
+import sys
 from CoordsMonitor import CoordsMonitor
 from VelocityMonitor import VelocityMonitor
+
+try:
+    _proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _proj_root not in sys.path:
+        sys.path.insert(0, _proj_root)
+    from visualizer.position_publisher import publish_positions
+    HAS_VISUALIZER_PUBLISHER = True
+except ImportError:
+    HAS_VISUALIZER_PUBLISHER = False
 
 # Конфигурация дронов
 DRONES_CONFIG = [
@@ -154,7 +165,7 @@ class DroneController:
 
         if self.logging:
             self.logIter = 0
-            self.logfile = open(f"logs/two_drones_leader_stay/drone_{self.config['id']}_log.txt", "w")
+            self.logfile = open(f"logs/EMPTY_TEST/drone_{self.config['id']}_log.txt", "w")
         
         # PID-регуляторы для управления углами (торможение)
         # Roll регулятор (для компенсации дрейфа влево-вправо)
@@ -719,7 +730,10 @@ def coordinate_exchange_loop(controllers):
             for drone_id, position in positions.items():
                 if drone_id != controller.config['id']:
                     controller.update_other_drone_position(drone_id, position)
-        
+
+        if HAS_VISUALIZER_PUBLISHER:
+            publish_positions(positions)
+
         #time.sleep(0.1)  # Обновление каждые 100мс
 
 def initialize_drone_parallel(controller, init_barrier):

@@ -1,4 +1,4 @@
-#!/home/user/Documents/Kursach/drone_swarm_simulation/drone_env/bin/python3
+#!/home/user/Документы/Kursach/drone_swarm_simulation/drone_env/bin/python3
 
 '''
 Summarize MAVLink logs. Useful for identifying which log is of interest in a large set.

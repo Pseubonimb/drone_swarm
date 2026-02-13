@@ -1,0 +1,25 @@
+---
+description: Webots–SITL timing, FDM, basicTimeStep, one step per packet
+globs: "**/webots_vehicle.py","**/run_sim.py","**/run_sitl_only.py"
+alwaysApply: false
+---
+
+# Simulator — Webots and SITL Timing
+
+## Problem (from analysis)
+
+- In `_handle_sitl()`: `robot.step(_timestep)` is called **only after** receiving a motor packet from SITL. So physics update rate = SITL exchange rate.
+- If Webots basicTimeStep is 10–20 ms, position (via FDM to SITL) updates at that rate; the external Python script can send RC at much higher rate → control reacts to position that is 10–20 ms old → overshoot.
+- Docs: too large basicTimeStep can cause instability (e.g. flip); too small changes dynamics and load.
+
+## Where in code
+
+- `webots_vehicle.py`: `_handle_sitl()` — select, send FDM, recv motors, then `robot.step(_timestep)`.
+- `run_sim.py`: starts Webots and SITL with `--model webots-python`; world’s basicTimeStep is in the .wbt file (WorldInfo).
+- `run_sitl_only.py`: starts SITL **without** `--model webots-python` (built-in physics) for isolation test.
+
+## Recommendations
+
+1. **Isolation test**: Run `run_sitl_only.py` + same scenario; if overshoot disappears, focus on Webots timing.
+2. **Tune basicTimeStep**: Try smaller (e.g. 5 ms) vs current value; balance stability vs update rate and CPU.
+3. **No extra delays**: Ensure no unnecessary sleeps in the Webots controller loop that would further reduce step rate.

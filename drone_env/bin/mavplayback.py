@@ -1,4 +1,4 @@
-#!/home/user/Documents/Kursach/drone_swarm_simulation/drone_env/bin/python3
+#!/home/user/Документы/Kursach/drone_swarm_simulation/drone_env/bin/python3
 
 '''
 play back a mavlink log as a FlightGear FG NET stream, and as a

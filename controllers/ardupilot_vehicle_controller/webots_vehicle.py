@@ -207,6 +207,13 @@ class WebotsArduVehicle():
                 step_success = self.robot.step(self._timestep)
                 if step_success == -1: # webots closed
                     break
+                # Write step timestamp for external rate monitoring (e.g. visualizer)
+                try:
+                    step_file = f"/tmp/webots_step_{self._instance}.txt"
+                    with open(step_file, "w") as f:
+                        f.write(str(time.time()))
+                except Exception:
+                    pass
 
         # if we leave the main loop then Webots must have closed
         s.close()

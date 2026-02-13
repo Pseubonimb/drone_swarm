@@ -1,0 +1,49 @@
+---
+description: Architecture of the drone swarm simulator (Webots + ArduPilot SITL, NED, CoordsMonitor)
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Drone Swarm Simulation — Architecture
+
+## Stack
+
+- **Webots**: 3D simulator; runs robot controllers that read sensors (IMU, GPS) and apply motor commands.
+- **ArduPilot SITL**: “Brain” of the drone; receives FDM (sensor data) and outputs motor commands.
+- **Bridge**: `controllers/ardupilot_vehicle_controller/webots_vehicle.py` — Webots controller that:
+  - Sends FDM (IMU, GPS, velocity, position) to SITL via UDP (port 9002+10*instance).
+  - Receives motor commands from SITL and applies them to Webots motors.
+
+## Coordinate system (NED)
+
+- **LOCAL_POSITION_NED**: x = North, y = East, z = Down (meters).
+- In Webots, forward is often along body X; NED is world frame. Do not mix body and NED when using CoordsMonitor.
+
+## CoordsMonitor
+
+- Reads `LOCAL_POSITION_NED` from MAVLink in a thread; used by Python scripts that send RC_OVERRIDE (e.g. leader/follower).
+- Coordinates come from **SITL** (EKF state), not directly from Webots. So if Webots is not running, SITL uses its own internal physics and still produces LOCAL_POSITION_NED.
+
+## RC_OVERRIDE flow
+
+1. Python script connects to SITL via MAVLink (UDP, e.g. 14551, 14561).
+2. Script uses CoordsMonitor to get position from SITL.
+3. Script sends RC_OVERRIDE; SITL runs attitude/position control and outputs motor commands.
+4. With Webots: motor commands go to Webots (webots_vehicle), which moves the robot and sends new FDM to SITL.
+5. Without Webots: SITL uses built-in physics; no Webots FDM.
+
+## Isolation test (Webots vs logic)
+
+To check if “chaser flies past leader” is due to Webots or to CoordsMonitor/control logic:
+
+- Run the **same** leader/follower scenario **without** Webots: only SITL (built-in physics) + Python script (CoordsMonitor + RC_OVERRIDE).
+- If the problem disappears → likely Webots (timing, FDM, or motor application).
+- If the problem remains → focus on CoordsMonitor (threading, message type, NED) or control gains (PID, RC mapping).
+
+Use `run_sitl_only.py` and the same script (e.g. `leader_forward_one_move.py`) with ports 14551/14561.
+
+## Bottlenecks (see docs/PROJECT_ANALYSIS_AND_STRATEGY.md)
+
+- Control: no damping (kd=0) → overshoot; follower loop runs faster than position update rate.
+- Data: leader position freshness limited by SITL/Webots; chain leader→exchange→follower has 20–100 ms delay.
+- Simulator: one Webots step per SITL packet; basicTimeStep sets physics/position update rate.

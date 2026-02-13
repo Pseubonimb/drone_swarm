@@ -41,7 +41,7 @@ PROTO Iris [
       }
       Propeller {
         shaftAxis 0 0 1
-        centerOfThrust 0.130000 -0.220000 0.023000
+        centerOfThrust 0.130000 -0.210000 0.023000
         thrustConstants 0.0012 0
         torqueConstants 5.0e-04 0
         device RotationalMotor {
@@ -51,11 +51,11 @@ PROTO Iris [
           multiplier 1
         }
         slowHelix Solid {
-          translation 0.130000 -0.220000 0.023000
+          translation 0.130000 -0.210000 0.023000
           children [
             Shape {
-              appearance DEF PROP_BLUE PBRAppearance {
-                baseColor 0 0 0.75
+              appearance PBRAppearance {
+                baseColor 0 0 0.75 # Синий
                 metalness 0.3
               }
               geometry DEF CCW_PROP Mesh {
@@ -69,7 +69,7 @@ PROTO Iris [
       }
       Propeller {
         shaftAxis 0 0 1
-        centerOfThrust -0.130000 0.200000 0.023000
+        centerOfThrust -0.130000 0.210000 0.023000
         thrustConstants 0.0012 0
         torqueConstants 5.0e-04 0
         device RotationalMotor {
@@ -79,11 +79,11 @@ PROTO Iris [
           multiplier 1
         }
         slowHelix Solid {
-          translation -0.130000 0.200000 0.023000
+          translation -0.130000 0.210000 0.023000
           children [
             Shape {
-              appearance DEF PROP_BLACK PBRAppearance {
-                baseColor 0 0 0
+              appearance PBRAppearance {
+                baseColor 1 0 0 # Красный
                 metalness 0.3
               }
               geometry USE CCW_PROP
@@ -93,7 +93,7 @@ PROTO Iris [
       }
       Propeller {
         shaftAxis 0 0 1
-        centerOfThrust 00.130000 0.220000 0.023000
+        centerOfThrust 00.130000 0.210000 0.023000
         thrustConstants -0.0012 0
         torqueConstants 5.0e-04 0
         device RotationalMotor {
@@ -103,10 +103,13 @@ PROTO Iris [
           multiplier -1
         }
         slowHelix Solid {
-          translation 0.130000 0.220000 0.023000
+          translation 0.130000 0.210000 0.023000
           children [
             Shape {
-              appearance USE PROP_BLUE
+              appearance PBRAppearance {
+                baseColor 0 1 0 # Зелёный
+                metalness 0.3
+              }
               geometry DEF CW_PROP Mesh {
                 url [
                   "meshes/iris_prop_cw.dae"
@@ -118,7 +121,7 @@ PROTO Iris [
       }
       Propeller {
         shaftAxis 0 0 1
-        centerOfThrust -0.130000 -0.200000 0.023000
+        centerOfThrust -0.130000 -0.210000 0.023000
         thrustConstants -0.0012 0
         torqueConstants 5.0e-04 0
         device RotationalMotor {
@@ -128,10 +131,13 @@ PROTO Iris [
           multiplier -1
         }
         slowHelix Solid {
-          translation -0.130000 -0.200000 0.023000
+          translation -0.130000 -0.210000 0.023000
           children [
             Shape {
-              appearance USE PROP_BLACK
+              appearance PBRAppearance {
+                baseColor 1 1 1 # Белый
+                metalness 0.3
+              }
               geometry USE CW_PROP
             }
           ]

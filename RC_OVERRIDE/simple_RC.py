@@ -42,13 +42,22 @@ def send_rc_override(drone, chan1, chan2, chan3, chan4):
     )
 
 try:
-    # === Тестирование в режиме POS_HOLD ===
+    neutral = 1500 # Нейтральное значение ШИМ канала
+
+    # === Переход в POS_HOLD для выравнивания, а затем переход в ALT_HOLD ===
+    # LOITER mode = 5, POS_HOLD mode = 16 (2 - ALT_HOLD)
 
     print("\n=== Testing POS_HOLD mode ===")
-    # LOITER mode = 5, POS_HOLD mode = 16 (устаревший)
-    master.set_mode(16)  # POS_HOLD (2 - ALT_HOLD)
+    master.set_mode(16)  # POS_HOLD 
+
+    # start = time.time()
+    # while time.time() - start < 5:
+    #     send_rc_override(master, neutral, neutral, neutral, neutral)
+    #     time.sleep(1)
+
+    # print("\n=== Testing ALT_HOLD mode ===")
+    # master.set_mode(2)
     
-    neutral = 1500 # Нейтральное значение ШИМ канала
 
     while True:
         # Движение вперёд

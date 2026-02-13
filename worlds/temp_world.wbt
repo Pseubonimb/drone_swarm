@@ -10,7 +10,7 @@ EXTERNPROTO "../protos/Iris.proto"
 
 WorldInfo {
   title "Iris Ardupilot"
-  basicTimeStep 2
+  basicTimeStep 1
   FPS 20
 }
 Viewpoint {
@@ -58,10 +58,14 @@ Iris {
   rotation 0 1 0 0
   name "Iris_0"
   controller "ardupilot_vehicle_controller"
-  controllerArgs [
-    "--instance" "0"
-    "--motors" "m1_motor, m2_motor, m3_motor, m4_motor"
-  ]
+  controllerArgs [ "--instance" "0" "--motors" "m1_motor, m2_motor, m3_motor, m4_motor" ]
 }
 
+Iris {
+  translation 0.0 2.0 0.0549632125
+  rotation 0 1 0 0
+  name "Iris_1"
+  controller "ardupilot_vehicle_controller"
+  controllerArgs [ "--instance" "1" "--motors" "m1_motor, m2_motor, m3_motor, m4_motor" ]
+}
 

@@ -31,8 +31,8 @@ DRONE_TEMPLATE = '''Iris {{
 
 # === Функция: генерация позиций дронов ===
 def generate_position(index, drones_per_row=10, dx=2.0, dy=2.0, z=0.0549632125):
-    row = index // drones_per_row
-    col = index % drones_per_row
+    row = index % drones_per_row
+    col = index // drones_per_row
     x = col * dx
     y = row * dy
     return x, y, z
@@ -136,7 +136,7 @@ if __name__ == "__main__":
         )
         print(sitl_proc)
         processes.append(sitl_proc)
-        time.sleep(3)
+        time.sleep(5)
 
 
 

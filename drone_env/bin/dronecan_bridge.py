@@ -1,4 +1,4 @@
-#!/home/user/Documents/Kursach/drone_swarm_simulation/drone_env/bin/python3
+#!/home/user/Документы/Kursach/drone_swarm_simulation/drone_env/bin/python3
 '''
 bridge between two CAN interfaces
 this can be used to bridge a hardware device with SLCAN to a SITL vcan0 environment
